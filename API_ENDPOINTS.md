@@ -2,7 +2,9 @@
 
 This document describes all available endpoints for the frontend development team.
 
-**Base URL**: `http://localhost:8000` (local) or `https://your-space.hf.space` (Hugging Face Spaces)
+**Base URLs**:
+- Local development: `http://localhost:8000`
+- Production (Hugging Face Spaces): `https://salmeida-my-rag-chatbot.hf.space`
 
 ---
 
@@ -24,9 +26,12 @@ Check if the API is ready to receive requests.
 **Status Codes**:
 - `200 OK`: API is operational
 
-**Example**:
+**Examples**:
 ```bash
+# Local
 curl http://localhost:8000/health
+# Production
+curl https://salmeida-my-rag-chatbot.hf.space/health
 ```
 
 ---
@@ -61,9 +66,12 @@ Get API status and available endpoints.
 **Status Codes**:
 - `200 OK`: Success
 
-**Example**:
+**Examples**:
 ```bash
+# Local
 curl http://localhost:8000/
+# Production
+curl https://salmeida-my-rag-chatbot.hf.space/
 ```
 
 ---
@@ -104,7 +112,12 @@ Upload a PDF file to be processed and indexed. This endpoint processes the PDF, 
 
 **Example with curl**:
 ```bash
+# Local
 curl -X POST http://localhost:8000/upload \
+  -F "file=@document.pdf"
+
+# Production
+curl -X POST https://salmeida-my-rag-chatbot.hf.space/upload \
   -F "file=@document.pdf"
 ```
 
@@ -182,7 +195,13 @@ Ask a question about the uploaded documents. The API will search the indexed doc
 
 **Example with curl**:
 ```bash
+# Local
 curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the main theme of the document?"}'
+
+# Production
+curl -X POST https://salmeida-my-rag-chatbot.hf.space/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "What is the main theme of the document?"}'
 ```
