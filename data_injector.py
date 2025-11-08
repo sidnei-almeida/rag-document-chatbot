@@ -26,7 +26,7 @@ def main():
     # A IA não consegue ler um livro inteiro de uma vez. Precisamos quebrar em pedaços.
     # chunk_size=1000: cada pedaço terá +/- 1000 caracteres.
     # chunk_overlap=100: cada pedaço compartilha um pouquinho com o anterior para não perder contexto.
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3500, chunk_overlap=400)
     textos_divididos = text_splitter.split_documents(documentos)
     print(f"    Documento dividido em {len(textos_divididos)} pedaços menores.")
 

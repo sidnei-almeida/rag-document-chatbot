@@ -174,7 +174,10 @@ def process_pdf_and_update_index(pdf_path: str):
     print(f"    PDF loaded. Total pages read: {len(documents)}")
     
     # 2. Split into chunks
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=3500,
+        chunk_overlap=400
+    )
     chunks = text_splitter.split_documents(documents)
     print(f"    Document split into {len(chunks)} chunks")
     
@@ -193,7 +196,7 @@ def process_pdf_and_update_index(pdf_path: str):
     print(f"    Index saved to '{VECTOR_STORE_NAME}'")
     
     # 5. Update retriever
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    retriever = vector_store.as_retriever(search_kwargs={"k": 6})
     
     return len(chunks), len(documents)
 
