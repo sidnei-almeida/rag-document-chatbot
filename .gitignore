@@ -50,3 +50,4 @@ Thumbs.db
 # FAISS index (opcional - descomente se não quiser commitar o índice)
 # faiss_index/
 
+*.pdf
