@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+faiss_index/index.faiss filter=lfs diff=lfs merge=lfs -text
+faiss_index/index.pkl filter=lfs diff=lfs merge=lfs -text
