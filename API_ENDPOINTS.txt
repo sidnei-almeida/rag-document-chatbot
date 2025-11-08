@@ -2,7 +2,9 @@
                     DOCMIND API - ENDPOINTS DOCUMENTATION
 ================================================================================
 
-Base URL: http://localhost:8000 (local) or https://your-space.hf.space (HF)
+Base URLs:
+- Local development: http://localhost:8000
+- Production (Hugging Face): https://salmeida-my-rag-chatbot.hf.space
 
 ================================================================================
 1. HEALTH CHECK
@@ -16,6 +18,10 @@ Response:
 }
 
 Status Codes: 200 OK
+
+Examples:
+- Local:      curl http://localhost:8000/health
+- Production: curl https://salmeida-my-rag-chatbot.hf.space/health
 
 ================================================================================
 2. API STATUS & INFO
@@ -38,6 +44,10 @@ Fields:
 - index_ready: Whether documents have been indexed (can ask questions)
 
 Status Codes: 200 OK
+
+Examples:
+- Local:      curl http://localhost:8000/
+- Production: curl https://salmeida-my-rag-chatbot.hf.space/
 
 ================================================================================
 3. UPLOAD PDF DOCUMENT
@@ -70,6 +80,14 @@ Status Codes:
 - 200 OK: PDF processed successfully
 - 400 Bad Request: File is not a PDF or missing file
 - 500 Internal Server Error: Error processing PDF
+
+curl examples:
+- Local:
+  curl -X POST http://localhost:8000/upload \
+    -F "file=@document.pdf"
+- Production:
+  curl -X POST https://salmeida-my-rag-chatbot.hf.space/upload \
+    -F "file=@document.pdf"
 
 JavaScript Example (Fetch):
 const formData = new FormData();
@@ -127,6 +145,16 @@ Status Codes:
 - 400 Bad Request: No documents indexed yet (need to upload PDF first)
 - 503 Service Unavailable: API is still initializing
 - 500 Internal Server Error: Error processing the question
+
+curl examples:
+- Local:
+  curl -X POST http://localhost:8000/ask \
+    -H "Content-Type: application/json" \
+    -d '{"question": "What is the main theme of the document?"}'
+- Production:
+  curl -X POST https://salmeida-my-rag-chatbot.hf.space/ask \
+    -H "Content-Type: application/json" \
+    -d '{"question": "What is the main theme of the document?"}'
 
 JavaScript Example (Fetch):
 const response = await fetch('http://localhost:8000/ask', {
