@@ -1,11 +1,14 @@
 import os
+import tempfile
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
 # --- LangChain & AI ---
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
 
 # --- Configuration ---
@@ -19,6 +22,7 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 vector_store = None
 retriever = None
 llm = None
+embeddings_model = None
 
 class QuestionRequest(BaseModel):
     question: str
@@ -26,7 +30,7 @@ class QuestionRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    global vector_store, retriever, llm
+    global vector_store, retriever, llm, embeddings_model
     print("--> Initializing API...")
 
     # 1. Check if API key is configured
@@ -38,21 +42,28 @@ async def lifespan(app: FastAPI):
     print("--> Loading Embeddings model...")
     embeddings_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-    # 3. Load the FAISS vector database
+    # 3. Load the FAISS vector database (if it exists)
     print(f"--> Loading FAISS vector database from '{VECTOR_STORE_NAME}'...")
     try:
-        vector_store = FAISS.load_local(
-            VECTOR_STORE_NAME, 
-            embeddings_model, 
-            allow_dangerous_deserialization=True
-        )
-        retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-        print("    Vector database loaded successfully!")
+        if os.path.exists(VECTOR_STORE_NAME):
+            vector_store = FAISS.load_local(
+                VECTOR_STORE_NAME, 
+                embeddings_model, 
+                allow_dangerous_deserialization=True
+            )
+            retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+            print("    Vector database loaded successfully!")
+        else:
+            print(f"    No existing vector database found. Waiting for PDF upload...")
+            # Create empty vector store to avoid errors
+            vector_store = None
+            retriever = None
     except Exception as e:
-        print(f"FATAL ERROR: Could not load folder {VECTOR_STORE_NAME}.")
+        print(f"WARNING: Could not load folder {VECTOR_STORE_NAME}.")
         print(f"Error: {str(e)}")
-        print("Make sure you ran data_injector.py first!")
-        raise e
+        print("You can upload a PDF to create the index.")
+        vector_store = None
+        retriever = None
 
     # 4. Configure LLM using Groq (fast and reliable)
     print(f"--> Connecting to Groq model ({GROQ_MODEL})...")
@@ -100,8 +111,14 @@ Answer:"""
 async def ask_document(req: QuestionRequest):
     global retriever, llm
     
-    if not retriever or not llm:
+    if not llm:
         raise HTTPException(status_code=503, detail="API is still initializing.")
+    
+    if not retriever:
+        raise HTTPException(
+            status_code=400, 
+            detail="No documents indexed yet. Please upload a PDF first using /upload endpoint."
+        )
     
     try:
         print(f"Receiving question: {req.question}")
@@ -145,12 +162,102 @@ async def ask_document(req: QuestionRequest):
             detail=f"Error processing question: {error_type}: {error_details}"
         )
 
+def process_pdf_and_update_index(pdf_path: str):
+    """Process PDF file and update FAISS index"""
+    global vector_store, retriever, embeddings_model
+    
+    print(f"--> Processing PDF: {pdf_path}")
+    
+    # 1. Load PDF
+    loader = PyPDFLoader(pdf_path)
+    documents = loader.load()
+    print(f"    PDF loaded. Total pages read: {len(documents)}")
+    
+    # 2. Split into chunks
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    chunks = text_splitter.split_documents(documents)
+    print(f"    Document split into {len(chunks)} chunks")
+    
+    # 3. Create or update FAISS index
+    if vector_store is None:
+        # Create new index
+        print("--> Creating new FAISS index...")
+        vector_store = FAISS.from_documents(chunks, embeddings_model)
+    else:
+        # Add to existing index
+        print("--> Adding documents to existing FAISS index...")
+        vector_store.add_documents(chunks)
+    
+    # 4. Save index to disk
+    vector_store.save_local(VECTOR_STORE_NAME)
+    print(f"    Index saved to '{VECTOR_STORE_NAME}'")
+    
+    # 5. Update retriever
+    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    
+    return len(chunks), len(documents)
+
+@app.post("/upload")
+async def upload_pdf(file: UploadFile = File(...)):
+    """Upload and process a PDF file to update the FAISS index"""
+    global vector_store, retriever
+    
+    # Validate file type
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+    
+    # Create temporary file to save uploaded PDF
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            # Save uploaded file to temporary location
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+        
+        print(f"--> Received PDF upload: {file.filename}")
+        
+        # Process PDF and update index
+        chunks_count, pages_count = process_pdf_and_update_index(tmp_path)
+        
+        # Clean up temporary file
+        os.unlink(tmp_path)
+        
+        return {
+            "message": "PDF processed successfully",
+            "filename": file.filename,
+            "pages": pages_count,
+            "chunks": chunks_count,
+            "status": "ready"
+        }
+        
+    except Exception as e:
+        import traceback
+        error_details = str(e)
+        error_type = type(e).__name__
+        traceback_str = traceback.format_exc()
+        print(f"Error processing PDF: {error_details}")
+        print(f"Type: {error_type}")
+        print(f"Full traceback:\n{traceback_str}")
+        
+        # Clean up temporary file if it exists
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing PDF: {error_type}: {error_details}"
+        )
+
 @app.get("/")
 def home():
     return {
         "status": "DocMind API online", 
-        "endpoints": ["/ask (POST)"],
-        "health": "ok" if (retriever and llm) else "initializing"
+        "endpoints": [
+            "/ask (POST) - Ask questions about documents",
+            "/upload (POST) - Upload PDF files to process"
+        ],
+        "health": "ok" if (retriever and llm) else "initializing",
+        "index_ready": retriever is not None
     }
 
 @app.get("/health")
