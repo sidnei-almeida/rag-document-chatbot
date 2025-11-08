@@ -1,13 +1,22 @@
+# Web Framework
 fastapi
 uvicorn[standard]
+python-multipart  # Required for file uploads (UploadFile)
+
+# LangChain Core
 langchain
 langchain-core
-langchain-community
-langchain-huggingface
-langchain-groq
-langchain-text-splitters
+langchain-community  # Includes PyPDFLoader, FAISS
+langchain-text-splitters  # RecursiveCharacterTextSplitter
+langchain-huggingface  # HuggingFaceEmbeddings
+langchain-groq  # ChatGroq for LLM
+
+# PDF Processing
+pypdf  # Required by PyPDFLoader
+
+# Vector Store
+faiss-cpu  # FAISS vector database
+
+# Embeddings
 huggingface_hub
-sentence-transformers
-pypdf
-faiss-cpu
-python-multipart
+sentence-transformers  # Embedding models
