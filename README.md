@@ -1,3 +1,13 @@
+---
+title: RAG Document Chatbot
+emoji: 🤖
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+license: mit
+---
+
 # RAG Document Chatbot
 
 A serverless RAG (Retrieval-Augmented Generation) chatbot built with FastAPI, LangChain, and Docker. Hosted on Hugging Face Spaces to answer questions about PDF documents using open-source LLMs via Groq.
