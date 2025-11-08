@@ -23,6 +23,23 @@ vector_store = None
 retriever = None
 llm = None
 embeddings_model = None
+AGENT_PERSONALITY = ""
+PERSONALITY_FILE = "AGENT_PERSONALITY.txt"
+
+def load_personality():
+    """Load personality from file"""
+    global AGENT_PERSONALITY
+    try:
+        if os.path.exists(PERSONALITY_FILE):
+            with open(PERSONALITY_FILE, 'r', encoding='utf-8') as f:
+                AGENT_PERSONALITY = f.read().strip()
+            print(f"--> Agent personality loaded from {PERSONALITY_FILE}")
+        else:
+            print(f"WARNING: {PERSONALITY_FILE} not found, using default personality")
+            AGENT_PERSONALITY = "You are a helpful and knowledgeable assistant."
+    except Exception as e:
+        print(f"Error loading personality: {e}")
+        AGENT_PERSONALITY = "You are a helpful and knowledgeable assistant."
 
 class QuestionRequest(BaseModel):
     question: str
@@ -32,6 +49,9 @@ async def lifespan(app: FastAPI):
     # Startup
     global vector_store, retriever, llm, embeddings_model
     print("--> Initializing API...")
+
+    # 0. Load agent personality
+    load_personality()
 
     # 1. Check if API key is configured
     if not GROQ_API_KEY:
@@ -72,8 +92,8 @@ async def lifespan(app: FastAPI):
     try:
         llm = ChatGroq(
             model_name=GROQ_MODEL,
-            temperature=0.3,
-            max_tokens=512,
+            temperature=0.7,  # Increased for more personality and creativity
+            max_tokens=1024,  # Increased for more complete responses
         )
         print("    Groq LLM configured successfully!")
     except Exception as e:
@@ -94,17 +114,34 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-def create_prompt(context: str, question: str) -> str:
-    """Creates a simple prompt combining context and question"""
-    prompt = f"""Use the following context to answer the question.
-If you don't know the answer, just say you don't know, don't make up an answer.
+def create_prompt(context: str, question: str, has_relevant_context: bool = True) -> str:
+    """Creates a prompt combining personality, context and question"""
+    
+    # Check if question is general/conversational (doesn't need document context)
+    general_questions = ["hello", "hi", "hey", "how are you", "what can you do", 
+                        "help", "thanks", "thank you", "bye", "goodbye", "olá", "oi"]
+    is_general = any(gq in question.lower() for gq in general_questions)
+    
+    if is_general or not has_relevant_context:
+        # For general questions, respond with personality but don't require context
+        prompt = f"""{AGENT_PERSONALITY}
 
-Context:
+The user asked: {question}
+
+Respond naturally and engagingly. You don't need to reference any document for this question. Be yourself!"""
+    else:
+        # For document-specific questions, use context
+        prompt = f"""{AGENT_PERSONALITY}
+
+You have access to the following context from a document. Use it to answer the question, but maintain your personality and style.
+
+Context from document:
 {context}
 
 Question: {question}
 
-Answer:"""
+Answer based on the context above, but keep your unique voice and style:"""
+    
     return prompt
 
 @app.post("/ask")
@@ -114,14 +151,31 @@ async def ask_document(req: QuestionRequest):
     if not llm:
         raise HTTPException(status_code=503, detail="API is still initializing.")
     
-    if not retriever:
-        raise HTTPException(
-            status_code=400, 
-            detail="No documents indexed yet. Please upload a PDF first using /upload endpoint."
-        )
-    
     try:
         print(f"Receiving question: {req.question}")
+        
+        # Check if question is general/conversational (doesn't need document context)
+        general_questions = ["hello", "hi", "hey", "how are you", "what can you do", 
+                            "help", "thanks", "thank you", "bye", "goodbye", "olá", "oi"]
+        is_general = any(gq in req.question.lower() for gq in general_questions)
+        
+        # If no retriever but it's a general question, allow response
+        if not retriever:
+            if is_general:
+                # Allow general questions even without documents
+                print("--> General question detected, responding without document context...")
+                prompt = create_prompt("", req.question, has_relevant_context=False)
+                response = llm.invoke(prompt)
+                response_text = response.content if hasattr(response, 'content') else str(response)
+                return {
+                    "answer": response_text,
+                    "sources": None
+                }
+            else:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="No documents indexed yet. Please upload a PDF first using /upload endpoint, or ask a general question like 'Hello' or 'What can you do?'"
+                )
         
         # 1. Search for relevant documents in FAISS (manual)
         print("--> Searching for relevant documents in FAISS...")
@@ -131,8 +185,12 @@ async def ask_document(req: QuestionRequest):
         context = "\n\n".join([doc.page_content for doc in docs])
         print(f"    Found {len(docs)} relevant documents")
         
-        # 3. Create simple prompt (manual)
-        prompt = create_prompt(context, req.question)
+        # Check if context is actually relevant (not just random chunks)
+        # If similarity is too low or context is too short, treat as general question
+        has_relevant_context = len(context) > 200 and len(docs) > 0
+        
+        # 3. Create prompt with personality
+        prompt = create_prompt(context, req.question, has_relevant_context)
         
         # 4. Send prompt directly to Groq LLM (without chains)
         print("--> Sending prompt to Groq LLM...")
@@ -140,14 +198,16 @@ async def ask_document(req: QuestionRequest):
         response = llm.invoke(prompt)
         response_text = response.content if hasattr(response, 'content') else str(response)
         
-        # 5. Extract sources (pages) from documents
-        sources = [doc.metadata.get("page", "Unknown") for doc in docs]
+        # 5. Extract sources (pages) from documents (only if relevant context was used)
+        sources = []
+        if has_relevant_context:
+            sources = [doc.metadata.get("page", "Unknown") for doc in docs]
         
         print("--> Response generated successfully!")
         
         return {
             "answer": response_text,
-            "sources": sources
+            "sources": sources if sources else None
         }
     except Exception as e:
         import traceback
