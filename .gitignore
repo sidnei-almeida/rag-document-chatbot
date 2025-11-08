@@ -44,8 +44,8 @@ env/
 .DS_Store
 Thumbs.db
 
-# PDFs (opcional - descomente se não quiser commitar PDFs)
-# *.pdf
+# PDFs - não commitar PDFs (usuários fazem upload via API)
+*.pdf
 
 # FAISS index (opcional - descomente se não quiser commitar o índice)
 # faiss_index/
