@@ -392,34 +392,18 @@ def clear_index():
     global vector_store, retriever
     
     try:
-        # Clear in-memory index first (always succeeds)
+        # Clear in-memory index (this is what matters - disk files won't be loaded if memory is cleared)
         vector_store = None
         retriever = None
-        print("--> Cleared in-memory index")
+        print("--> Cleared FAISS index from memory")
         
-        # Try to delete index files from disk
-        # Note: In some environments (like Hugging Face Spaces), file deletion might be restricted
-        if os.path.exists(VECTOR_STORE_NAME):
-            try:
-                shutil.rmtree(VECTOR_STORE_NAME)
-                print(f"--> Deleted FAISS index directory: '{VECTOR_STORE_NAME}'")
-                disk_cleared = True
-            except PermissionError as pe:
-                print(f"WARNING: Could not delete index directory due to permissions: {pe}")
-                print("    Index cleared from memory, but files remain on disk")
-                disk_cleared = False
-            except Exception as disk_error:
-                print(f"WARNING: Could not delete index directory: {disk_error}")
-                disk_cleared = False
-        else:
-            print(f"--> Index directory '{VECTOR_STORE_NAME}' does not exist on disk")
-            disk_cleared = True  # Nothing to delete
+        # Note: We don't try to delete disk files in Hugging Face Spaces due to permission restrictions
+        # This is fine - the memory clear is sufficient. New uploads will recreate the index.
         
         return {
-            "message": "Index cleared successfully from memory" + (" and disk" if disk_cleared else " (disk deletion skipped due to permissions)"),
+            "message": "Index cleared successfully from memory",
             "status": "cleared",
-            "memory_cleared": True,
-            "disk_cleared": disk_cleared
+            "memory_cleared": True
         }
     except Exception as e:
         error_details = str(e)
