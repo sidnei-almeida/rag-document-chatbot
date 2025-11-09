@@ -3,6 +3,7 @@ import tempfile
 import shutil
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # --- LangChain & AI ---
@@ -113,6 +114,15 @@ app = FastAPI(
     title="DocMind API", 
     description="RAG Chatbot with FastAPI and Docker",
     lifespan=lifespan
+)
+
+# Configure CORS to allow requests from any origin (including local HTML files)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (you can restrict this in production)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
 
 def create_prompt(context: str, question: str, has_relevant_context: bool = True, documents_available: bool = True) -> str:
@@ -382,23 +392,42 @@ def clear_index():
     global vector_store, retriever
     
     try:
-        # Clear in-memory index
+        # Clear in-memory index first (always succeeds)
         vector_store = None
         retriever = None
+        print("--> Cleared in-memory index")
         
-        # Delete index files from disk
+        # Try to delete index files from disk
+        # Note: In some environments (like Hugging Face Spaces), file deletion might be restricted
         if os.path.exists(VECTOR_STORE_NAME):
-            shutil.rmtree(VECTOR_STORE_NAME)
-            print(f"--> Cleared FAISS index: '{VECTOR_STORE_NAME}' deleted")
+            try:
+                shutil.rmtree(VECTOR_STORE_NAME)
+                print(f"--> Deleted FAISS index directory: '{VECTOR_STORE_NAME}'")
+                disk_cleared = True
+            except PermissionError as pe:
+                print(f"WARNING: Could not delete index directory due to permissions: {pe}")
+                print("    Index cleared from memory, but files remain on disk")
+                disk_cleared = False
+            except Exception as disk_error:
+                print(f"WARNING: Could not delete index directory: {disk_error}")
+                disk_cleared = False
+        else:
+            print(f"--> Index directory '{VECTOR_STORE_NAME}' does not exist on disk")
+            disk_cleared = True  # Nothing to delete
         
         return {
-            "message": "Index cleared successfully",
-            "status": "cleared"
+            "message": "Index cleared successfully from memory" + (" and disk" if disk_cleared else " (disk deletion skipped due to permissions)"),
+            "status": "cleared",
+            "memory_cleared": True,
+            "disk_cleared": disk_cleared
         }
     except Exception as e:
         error_details = str(e)
         error_type = type(e).__name__
         print(f"Error clearing index: {error_details}")
+        print(f"Error type: {error_type}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
             detail=f"Error clearing index: {error_type}: {error_details}"
