@@ -1,7 +1,8 @@
 import os
 import tempfile
+import shutil
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 
 # --- LangChain & AI ---
@@ -259,11 +260,17 @@ async def ask_document(req: QuestionRequest):
             detail=f"Error processing question: {error_type}: {error_details}"
         )
 
-def process_pdf_and_update_index(pdf_path: str):
-    """Process PDF file and update FAISS index"""
+def process_pdf_and_update_index(pdf_path: str, replace: bool = True):
+    """Process PDF file and update FAISS index
+    
+    Args:
+        pdf_path: Path to the PDF file
+        replace: If True, replace the entire index. If False, add to existing index.
+    """
     global vector_store, retriever, embeddings_model
     
     print(f"--> Processing PDF: {pdf_path}")
+    print(f"    Mode: {'REPLACE' if replace else 'ADD'}")
     
     # 1. Load PDF
     loader = PyPDFLoader(pdf_path)
@@ -279,9 +286,12 @@ def process_pdf_and_update_index(pdf_path: str):
     print(f"    Document split into {len(chunks)} chunks")
     
     # 3. Create or update FAISS index
-    if vector_store is None:
-        # Create new index
-        print("--> Creating new FAISS index...")
+    if vector_store is None or replace:
+        # Create new index (replace existing)
+        if replace and vector_store is not None:
+            print("--> Replacing existing FAISS index...")
+        else:
+            print("--> Creating new FAISS index...")
         vector_store = FAISS.from_documents(chunks, embeddings_model)
     else:
         # Add to existing index
@@ -298,8 +308,13 @@ def process_pdf_and_update_index(pdf_path: str):
     return len(chunks), len(documents)
 
 @app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)):
-    """Upload and process a PDF file to update the FAISS index"""
+async def upload_pdf(file: UploadFile = File(...), replace: bool = Query(True, description="Replace entire index (True) or add to existing (False)")):
+    """Upload and process a PDF file to update the FAISS index
+    
+    Args:
+        file: PDF file to upload
+        replace: If True (default), replace the entire index. If False, add to existing index.
+    """
     global vector_store, retriever
     
     # Validate file type
@@ -316,8 +331,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         print(f"--> Received PDF upload: {file.filename}")
         
-        # Process PDF and update index
-        chunks_count, pages_count = process_pdf_and_update_index(tmp_path)
+        # Process PDF and update index (default: replace to avoid accumulation)
+        chunks_count, pages_count = process_pdf_and_update_index(tmp_path, replace=replace)
         
         # Clean up temporary file
         os.unlink(tmp_path)
@@ -354,11 +369,40 @@ def home():
         "status": "DocMind API online", 
         "endpoints": [
             "/ask (POST) - Ask questions about documents",
-            "/upload (POST) - Upload PDF files to process"
+            "/upload (POST) - Upload PDF files to process",
+            "/clear (DELETE) - Clear/reset the document index"
         ],
         "health": "ok" if (retriever and llm) else "initializing",
         "index_ready": retriever is not None
     }
+
+@app.delete("/clear")
+def clear_index():
+    """Clear/reset the FAISS index - removes all documents from memory"""
+    global vector_store, retriever
+    
+    try:
+        # Clear in-memory index
+        vector_store = None
+        retriever = None
+        
+        # Delete index files from disk
+        if os.path.exists(VECTOR_STORE_NAME):
+            shutil.rmtree(VECTOR_STORE_NAME)
+            print(f"--> Cleared FAISS index: '{VECTOR_STORE_NAME}' deleted")
+        
+        return {
+            "message": "Index cleared successfully",
+            "status": "cleared"
+        }
+    except Exception as e:
+        error_details = str(e)
+        error_type = type(e).__name__
+        print(f"Error clearing index: {error_details}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error clearing index: {error_type}: {error_details}"
+        )
 
 @app.get("/health")
 def health():
