@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
                 embeddings_model, 
                 allow_dangerous_deserialization=True
             )
-            retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+            retriever = vector_store.as_retriever(search_kwargs={"k": 10})
             print("    Vector database loaded successfully!")
         else:
             print(f"    No existing vector database found. Waiting for PDF upload...")
@@ -139,18 +139,18 @@ The user asked: {question}
 Respond naturally. Documents are not uploaded yet."""
     elif not has_relevant_context:
         # Documents are available but the specific context found wasn't very relevant
-        # Still use what we found, but acknowledge it might be limited
+        # Still use what we found - the user's question is about the PDF
         if context and len(context) > 0:
             prompt = f"""{AGENT_PERSONALITY}
 
-You have access to documents, but the specific context found for this question is limited. Use what you can from the context below, and provide a COMPLETE answer. Be thorough even with limited context.
+IMPORTANT: The user has uploaded a PDF document and their question is about that document. Use the context below to answer, even if it seems limited. Search through the context carefully - the answer is there.
 
-Context from document:
+Context from the uploaded PDF document:
 {context}
 
-Question: {question}
+User's question about the PDF: {question}
 
-Provide a COMPLETE, DETAILED answer based on the context above. Be thorough and comprehensive:"""
+Your task: Answer based on the PDF context above. Even if the context seems limited, extract what you can and provide a complete answer. The user is asking about their uploaded PDF, so use the document content. Be thorough and comprehensive:"""
         else:
             prompt = f"""{AGENT_PERSONALITY}
 
@@ -160,16 +160,17 @@ You have access to documents, but couldn't find specific context for this questi
     else:
         # For document-specific questions with good context, use it
         # IMPORTANT: Provide COMPLETE and DETAILED answers - no length limits for document questions
+        # CRITICAL: The user's question is ALWAYS about the uploaded PDF document. Use the context to answer.
         prompt = f"""{AGENT_PERSONALITY}
 
-You have access to the following context from a document. Use it to answer the question COMPLETELY and THOROUGHLY. Provide a detailed, comprehensive answer. Explain fully, cite specific details, and don't hold back on information. Maintain your personality and style, but prioritize completeness.
+IMPORTANT: The user has uploaded a PDF document and their question is about that document. You MUST answer based on the context provided below. This is NOT a general question - it's specifically about the uploaded PDF.
 
-Context from document:
+Context from the uploaded PDF document:
 {context}
 
-Question: {question}
+User's question about the PDF: {question}
 
-Provide a COMPLETE, DETAILED answer based on the context above. Be thorough and comprehensive. No shortcuts—give the full answer the user needs:"""
+Your task: Provide a COMPLETE, DETAILED answer based EXCLUSIVELY on the context above. The user is asking about the PDF they uploaded, so use the document content to answer thoroughly. Cite specific page numbers when referencing information. Be comprehensive and detailed - no shortcuts. Maintain your personality and style, but prioritize accuracy and completeness based on the PDF content:"""
     
     return prompt
 
@@ -210,14 +211,19 @@ async def ask_document(req: QuestionRequest):
         print("--> Searching for relevant documents in FAISS...")
         docs = retriever.invoke(req.question)
         
-        # 2. Format context from found documents
-        context = "\n\n".join([doc.page_content for doc in docs])
-        print(f"    Found {len(docs)} relevant documents")
+        # 2. Format context from found documents with page references
+        context_parts = []
+        for i, doc in enumerate(docs):
+            page_num = doc.metadata.get("page", "Unknown")
+            content = doc.page_content.strip()
+            context_parts.append(f"[Page {page_num}]\n{content}")
         
-        # Check if context is actually relevant (not just random chunks)
-        # If similarity is too low or context is too short, treat as general question
-        # Lowered threshold from 200 to 50 to be less restrictive
-        has_relevant_context = len(context) > 50 and len(docs) > 0
+        context = "\n\n---\n\n".join(context_parts)
+        print(f"    Found {len(docs)} relevant document chunks")
+        
+        # Always use context when documents are available - the user's question is about the PDF
+        # Only check if we got any documents at all
+        has_relevant_context = len(docs) > 0 and len(context.strip()) > 0
         
         # 3. Create prompt with personality
         # Documents are available (retriever exists), even if specific context isn't very relevant
@@ -286,8 +292,8 @@ def process_pdf_and_update_index(pdf_path: str):
     vector_store.save_local(VECTOR_STORE_NAME)
     print(f"    Index saved to '{VECTOR_STORE_NAME}'")
     
-    # 5. Update retriever
-    retriever = vector_store.as_retriever(search_kwargs={"k": 6})
+    # 5. Update retriever with more documents for better context
+    retriever = vector_store.as_retriever(search_kwargs={"k": 10})
     
     return len(chunks), len(documents)
 
