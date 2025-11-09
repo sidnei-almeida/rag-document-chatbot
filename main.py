@@ -12,6 +12,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
+from groq import RateLimitError
 
 # --- Configuration ---
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
@@ -42,6 +43,35 @@ def load_personality():
     except Exception as e:
         print(f"Error loading personality: {e}")
         AGENT_PERSONALITY = "You are a helpful and knowledgeable assistant."
+
+def ensure_retriever_ready():
+    """Ensure retriever is loaded from disk if available."""
+    global vector_store, retriever, embeddings_model
+
+    if retriever is not None:
+        return
+
+    if embeddings_model is None:
+        print("WARNING: Embeddings model not initialized; cannot load retriever yet.")
+        return
+
+    if not os.path.exists(VECTOR_STORE_NAME):
+        return
+
+    try:
+        print(f"--> Loading FAISS vector database from '{VECTOR_STORE_NAME}' (ensure_retriever_ready)...")
+        vector_store = FAISS.load_local(
+            VECTOR_STORE_NAME,
+            embeddings_model,
+            allow_dangerous_deserialization=True
+        )
+        retriever = vector_store.as_retriever(search_kwargs={"k": 10})
+        print("    Retriever initialized from saved index.")
+    except Exception as e:
+        print(f"WARNING: Failed to load retriever from '{VECTOR_STORE_NAME}' in ensure_retriever_ready.")
+        print(f"Error: {e}")
+        vector_store = None
+        retriever = None
 
 class QuestionRequest(BaseModel):
     question: str
@@ -199,6 +229,9 @@ async def ask_document(req: QuestionRequest):
         general_questions = ["hello", "hi", "hey", "how are you", "what can you do", 
                             "help", "thanks", "thank you", "bye", "goodbye", "olá", "oi"]
         is_general = any(gq in req.question.lower() for gq in general_questions)
+
+        # Ensure retriever is available (may load from disk if needed)
+        ensure_retriever_ready()
         
         # If no retriever but it's a general question, allow response
         if not retriever:
@@ -257,6 +290,13 @@ async def ask_document(req: QuestionRequest):
             "answer": response_text,
             "sources": sources if sources else None
         }
+    except RateLimitError as e:
+        error_details = getattr(e, "message", str(e))
+        print(f"Rate limit hit while processing question: {error_details}")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: {error_details}"
+        )
     except Exception as e:
         import traceback
         error_details = str(e)
@@ -375,6 +415,7 @@ async def upload_pdf(file: UploadFile = File(...), replace: bool = Query(True, d
 
 @app.get("/")
 def home():
+    ensure_retriever_ready()
     return {
         "status": "DocMind API online", 
         "endpoints": [
@@ -419,4 +460,5 @@ def clear_index():
 
 @app.get("/health")
 def health():
+    ensure_retriever_ready()
     return {"status": "ok" if (retriever and llm) else "initializing"}
