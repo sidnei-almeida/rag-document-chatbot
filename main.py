@@ -124,11 +124,12 @@ def create_prompt(context: str, question: str, has_relevant_context: bool = True
     
     if is_general:
         # For general questions, respond with personality but don't require context
+        # Keep it to maximum 8 sentences for jokes/general responses
         prompt = f"""{AGENT_PERSONALITY}
 
 The user asked: {question}
 
-Respond naturally and engagingly. You don't need to reference any document for this question. Be yourself!"""
+Respond naturally and engagingly. You don't need to reference any document for this question. Be yourself! Keep your response to maximum 8 sentences."""
     elif not documents_available:
         # No documents uploaded yet
         prompt = f"""{AGENT_PERSONALITY}
@@ -142,32 +143,33 @@ Respond naturally. Documents are not uploaded yet."""
         if context and len(context) > 0:
             prompt = f"""{AGENT_PERSONALITY}
 
-You have access to documents, but the specific context found for this question is limited. Use what you can from the context below, and answer based on your knowledge if needed.
+You have access to documents, but the specific context found for this question is limited. Use what you can from the context below, and provide a COMPLETE answer. Be thorough even with limited context.
 
 Context from document:
 {context}
 
 Question: {question}
 
-Answer based on the context above if relevant, but keep your unique voice and style:"""
+Provide a COMPLETE, DETAILED answer based on the context above. Be thorough and comprehensive:"""
         else:
             prompt = f"""{AGENT_PERSONALITY}
 
 The user asked: {question}
 
-You have access to documents, but couldn't find specific context for this question. Answer based on your general knowledge while maintaining your personality."""
+You have access to documents, but couldn't find specific context for this question. Answer based on your general knowledge while maintaining your personality. Keep it to maximum 8 sentences since this isn't directly about the documents."""
     else:
         # For document-specific questions with good context, use it
+        # IMPORTANT: Provide COMPLETE and DETAILED answers - no length limits for document questions
         prompt = f"""{AGENT_PERSONALITY}
 
-You have access to the following context from a document. Use it to answer the question, but maintain your personality and style.
+You have access to the following context from a document. Use it to answer the question COMPLETELY and THOROUGHLY. Provide a detailed, comprehensive answer. Explain fully, cite specific details, and don't hold back on information. Maintain your personality and style, but prioritize completeness.
 
 Context from document:
 {context}
 
 Question: {question}
 
-Answer based on the context above, but keep your unique voice and style:"""
+Provide a COMPLETE, DETAILED answer based on the context above. Be thorough and comprehensive. No shortcuts—give the full answer the user needs:"""
     
     return prompt
 
