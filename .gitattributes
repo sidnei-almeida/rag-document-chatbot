@@ -3,3 +3,4 @@
 faiss_index/index.faiss filter=lfs diff=lfs merge=lfs -text
 faiss_index/index.pkl filter=lfs diff=lfs merge=lfs -text
 faiss_index/* filter=lfs diff=lfs merge=lfs -text
+*.pdf filter=lfs diff=lfs merge=lfs -text
