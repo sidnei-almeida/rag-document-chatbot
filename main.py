@@ -114,7 +114,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-def create_prompt(context: str, question: str, has_relevant_context: bool = True) -> str:
+def create_prompt(context: str, question: str, has_relevant_context: bool = True, documents_available: bool = True) -> str:
     """Creates a prompt combining personality, context and question"""
     
     # Check if question is general/conversational (doesn't need document context)
@@ -122,15 +122,42 @@ def create_prompt(context: str, question: str, has_relevant_context: bool = True
                         "help", "thanks", "thank you", "bye", "goodbye", "olá", "oi"]
     is_general = any(gq in question.lower() for gq in general_questions)
     
-    if is_general or not has_relevant_context:
+    if is_general:
         # For general questions, respond with personality but don't require context
         prompt = f"""{AGENT_PERSONALITY}
 
 The user asked: {question}
 
 Respond naturally and engagingly. You don't need to reference any document for this question. Be yourself!"""
+    elif not documents_available:
+        # No documents uploaded yet
+        prompt = f"""{AGENT_PERSONALITY}
+
+The user asked: {question}
+
+Respond naturally. Documents are not uploaded yet."""
+    elif not has_relevant_context:
+        # Documents are available but the specific context found wasn't very relevant
+        # Still use what we found, but acknowledge it might be limited
+        if context and len(context) > 0:
+            prompt = f"""{AGENT_PERSONALITY}
+
+You have access to documents, but the specific context found for this question is limited. Use what you can from the context below, and answer based on your knowledge if needed.
+
+Context from document:
+{context}
+
+Question: {question}
+
+Answer based on the context above if relevant, but keep your unique voice and style:"""
+        else:
+            prompt = f"""{AGENT_PERSONALITY}
+
+The user asked: {question}
+
+You have access to documents, but couldn't find specific context for this question. Answer based on your general knowledge while maintaining your personality."""
     else:
-        # For document-specific questions, use context
+        # For document-specific questions with good context, use it
         prompt = f"""{AGENT_PERSONALITY}
 
 You have access to the following context from a document. Use it to answer the question, but maintain your personality and style.
@@ -164,7 +191,7 @@ async def ask_document(req: QuestionRequest):
             if is_general:
                 # Allow general questions even without documents
                 print("--> General question detected, responding without document context...")
-                prompt = create_prompt("", req.question, has_relevant_context=False)
+                prompt = create_prompt("", req.question, has_relevant_context=False, documents_available=False)
                 response = llm.invoke(prompt)
                 response_text = response.content if hasattr(response, 'content') else str(response)
                 return {
@@ -187,10 +214,12 @@ async def ask_document(req: QuestionRequest):
         
         # Check if context is actually relevant (not just random chunks)
         # If similarity is too low or context is too short, treat as general question
-        has_relevant_context = len(context) > 200 and len(docs) > 0
+        # Lowered threshold from 200 to 50 to be less restrictive
+        has_relevant_context = len(context) > 50 and len(docs) > 0
         
         # 3. Create prompt with personality
-        prompt = create_prompt(context, req.question, has_relevant_context)
+        # Documents are available (retriever exists), even if specific context isn't very relevant
+        prompt = create_prompt(context, req.question, has_relevant_context, documents_available=True)
         
         # 4. Send prompt directly to Groq LLM (without chains)
         print("--> Sending prompt to Groq LLM...")
