@@ -179,32 +179,34 @@ The user asked: {question}
 
 Respond naturally. Documents are not uploaded yet."""
     elif not has_relevant_context:
-        # Documents are available but the specific context found wasn't very relevant
-        # Still use what we found - the user's question is about the PDF
+        # Documents are available but the specific context found wasn't very relevant.
+        # Remind the model that the PDF exists and prevent it from asking for another upload.
         if context and len(context) > 0:
             prompt = f"""{AGENT_PERSONALITY}
 
-IMPORTANT: The user has uploaded a PDF document and their question is about that document. Use the context below to answer, even if it seems limited. Search through the context carefully - the answer is there.
+IMPORTANT: A PDF HAS been uploaded and processed already. You must acknowledge that you have access to it. Never say the document is missing and never ask the user to upload it again.
 
-Context from the uploaded PDF document:
+Context retrieved from the PDF (may be only tangentially related):
 {context}
 
 User's question about the PDF: {question}
 
-Your task: Answer based on the PDF context above. Even if the context seems limited, extract what you can and provide a complete answer. The user is asking about their uploaded PDF, so use the document content. Be thorough and comprehensive:"""
+Your task: Search the context carefully. If you can infer the answer, do so and explain your reasoning. If the exact information is not present, clearly state that the retrieved excerpts do not mention it, summarize what they DO mention, and suggest the user where the answer might be or ask for clarification. Do not fabricate details and do not claim the PDF is unavailable."""
         else:
             prompt = f"""{AGENT_PERSONALITY}
 
-The user asked: {question}
+IMPORTANT: A PDF HAS been uploaded and processed already. You must acknowledge that you have access to it. Never say the document is missing and never ask the user to upload it again.
 
-You have access to documents, but couldn't find specific context for this question. Answer based on your general knowledge while maintaining your personality. Keep it to maximum 8 sentences since this isn't directly about the documents."""
+User's question about the PDF: {question}
+
+Your task: Explain that the snippets retrieved from the document did not contain the requested detail. Offer any related insights you do know from prior pages or sections if applicable, invite the user to provide more context if necessary, and keep the tone helpful and confident. Do not invent information, and explicitly remind the user that you checked the PDF but did not locate that exact detail."""
     else:
         # For document-specific questions with good context, use it
         # IMPORTANT: Provide COMPLETE and DETAILED answers - no length limits for document questions
         # CRITICAL: The user's question is ALWAYS about the uploaded PDF document. Use the context to answer.
         prompt = f"""{AGENT_PERSONALITY}
 
-IMPORTANT: The user has uploaded a PDF document and their question is about that document. You MUST answer based on the context provided below. This is NOT a general question - it's specifically about the uploaded PDF.
+IMPORTANT: The user has uploaded a PDF document and their question is about that document. You MUST answer based on the context provided below. This is NOT a general question - it's specifically about the uploaded PDF. Never claim the document is missing or request another upload.
 
 Context from the uploaded PDF document:
 {context}
