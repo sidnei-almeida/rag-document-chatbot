@@ -20,34 +20,46 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment
+# Virtual environments
 venv/
 ENV/
 env/
 .venv
 
-# IDE
+# IDE / OS
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.DS_Store
+Thumbs.db
 
-# Environment variables
+# Secrets (nunca commitar)
 .env
-.env.local
+.env.*
+!.env.example
 
 # Logs
 *.log
 
-# OS
-.DS_Store
-Thumbs.db
-
-# PDFs - não commitar PDFs (usuários fazem upload via API)
+# PDFs de usuário — apenas o sample de demo vai pro repo
 *.pdf
+!sample_documents/
+!sample_documents/*.pdf
 
-# FAISS index (opcional - descomente se não quiser commitar o índice)
-# faiss_index/
+# PDFs pessoais / uploads locais
+documents/
 
-*.pdf
+# Índice FAISS — recriar com POST /upload ou /demo/load-sample (não enviar ao HF)
+faiss_index/
+
+# Testes / cobertura (código em tests/ continua versionado)
+.pytest_cache/
+pytest-cache-files-*/
+htmlcov/
+.coverage
+
+# Saídas geradas de avaliação
+evals/results.json
+evals/*.report.json

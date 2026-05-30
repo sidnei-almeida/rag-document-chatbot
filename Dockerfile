@@ -23,9 +23,9 @@ COPY --chown=user:user . .
 # Mudar para usuário não-root
 USER user
 
-# Porta padrão do Hugging Face Spaces
+# Hugging Face Spaces (Docker SDK) usa porta 7860 por padrão; PORT pode ser injetado
+ENV PORT=7860
 EXPOSE 7860
 
-# Comando para iniciar a aplicação
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860}"]
 

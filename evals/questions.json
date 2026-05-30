@@ -1,0 +1,59 @@
+[
+  {
+    "id": "about",
+    "question": "What is this document about?",
+    "expected_keywords": ["docmind", "document intelligence", "rag", "pdf"],
+    "expected_min_sources": 1,
+    "min_keyword_matches": 1
+  },
+  {
+    "id": "benefits",
+    "question": "What are the main benefits?",
+    "expected_keywords": ["benefits", "grounded", "portfolio", "configurable"],
+    "expected_min_sources": 1,
+    "min_keyword_matches": 1
+  },
+  {
+    "id": "limitations",
+    "question": "What are the limitations mentioned in the document?",
+    "expected_keywords": ["limitations", "ocr", "heuristic", "legal"],
+    "expected_min_sources": 1,
+    "min_keyword_matches": 1
+  },
+  {
+    "id": "technologies",
+    "question": "What technologies are used?",
+    "expected_keywords": ["fastapi", "faiss", "groq", "langchain"],
+    "expected_min_sources": 1,
+    "min_keyword_matches": 2
+  },
+  {
+    "id": "embeddings",
+    "question": "What embedding model does the system use?",
+    "expected_keywords": ["sentence-transformers", "minilm", "hugging face"],
+    "expected_min_sources": 1,
+    "min_keyword_matches": 1
+  },
+  {
+    "id": "summarize",
+    "question": "Summarize the document.",
+    "expected_keywords": ["docmind", "retrieval", "faiss", "demo"],
+    "expected_min_sources": 2,
+    "min_keyword_matches": 2
+  },
+  {
+    "id": "deployment",
+    "question": "Where is the system intended to be deployed?",
+    "expected_keywords": ["hugging face", "spaces", "docker"],
+    "expected_min_sources": 1,
+    "min_keyword_matches": 1
+  },
+  {
+    "id": "confidence",
+    "question": "Is the confidence score a calibrated probability?",
+    "expected_keywords": ["heuristic", "not", "probability"],
+    "expected_min_sources": 1,
+    "min_keyword_matches": 1,
+    "match_in": "sources"
+  }
+]

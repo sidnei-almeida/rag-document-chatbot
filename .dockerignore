@@ -12,11 +12,12 @@ dist/
 build/
 .git
 .gitignore
-README.md
-*.md
+.env
+.env.*
 .DS_Store
 *.log
 .pytest_cache/
+pytest-cache-files-*/
 .coverage
 htmlcov/
 .vscode/
@@ -24,4 +25,11 @@ htmlcov/
 *.swp
 *.swo
 *~
+
+# Não enviar para a imagem do Space
+tests/
+evals/results.json
+evals/RELATORIO_AVALIACAO.md
+documents/
+faiss_index/
 

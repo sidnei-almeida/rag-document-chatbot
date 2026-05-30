@@ -20,3 +20,7 @@ faiss-cpu  # FAISS vector database
 # Embeddings
 huggingface_hub
 sentence-transformers  # Embedding models
+
+# Testing (local / CI; no Groq calls in test suite)
+pytest
+httpx

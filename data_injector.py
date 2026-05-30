@@ -1,50 +1,46 @@
+import logging
 import os
-# Importando as ferramentas necessárias do LangChain
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
 
-# --- Configuração ---
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from app.core.config import settings
+from app.core.logging_config import setup_logging
+
+logger = logging.getLogger("docmind")
 NOME_ARQUIVO_PDF = "documento.pdf"
-NOME_BANCO_VETORIAL = "faiss_index"
+
 
 def main():
-    # 1. Verificação básica
+    setup_logging()
+
     if not os.path.exists(NOME_ARQUIVO_PDF):
-        print(f"ERRO: Não encontrei o arquivo '{NOME_ARQUIVO_PDF}' na pasta.")
+        logger.error("Arquivo '%s' não encontrado na pasta.", NOME_ARQUIVO_PDF)
         return
 
-    print(f"--> Começando a ler: {NOME_ARQUIVO_PDF}")
-
-    # 2. Carregar o PDF
+    logger.info("Lendo: %s", NOME_ARQUIVO_PDF)
     loader = PyPDFLoader(NOME_ARQUIVO_PDF)
     documentos = loader.load()
-    print(f"    PDF carregado. Total de páginas lidas: {len(documentos)}")
+    logger.info("PDF carregado: %s páginas", len(documentos))
 
-    # 3. Dividir em pedaços (Chunks)
-    # A IA não consegue ler um livro inteiro de uma vez. Precisamos quebrar em pedaços.
-    # chunk_size=1000: cada pedaço terá +/- 1000 caracteres.
-    # chunk_overlap=100: cada pedaço compartilha um pouquinho com o anterior para não perder contexto.
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=3500, chunk_overlap=400)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=settings.CHUNK_SIZE,
+        chunk_overlap=settings.CHUNK_OVERLAP,
+        separators=list(settings.TEXT_SPLITTER_SEPARATORS),
+    )
     textos_divididos = text_splitter.split_documents(documentos)
-    print(f"    Documento dividido em {len(textos_divididos)} pedaços menores.")
+    logger.info("Documento dividido em %s chunks", len(textos_divididos))
 
-    # 4. Criar os "Embeddings" (Vetorização)
-    # Aqui a mágica acontece. Vamos baixar um modelo PEQUENO e GRATUITO
-    # da Hugging Face que roda na sua CPU. Ele transforma texto em números.
-    print("--> Baixando modelo de Embeddings (pode demorar um pouquinho na 1ª vez)...")
-    embeddings_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    print("    Modelo carregado!")
+    logger.info("Carregando embeddings: %s", settings.EMBEDDING_MODEL_NAME)
+    embeddings_model = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL_NAME)
 
-    # 5. Criar e Salvar o Banco de Dados (FAISS)
-    # O FAISS pega os textos e os números (vetores) e cria um índice super rápido.
-    print("--> Criando o banco de dados vetorial (FAISS)...")
+    logger.info("Criando índice FAISS...")
     vector_store = FAISS.from_documents(textos_divididos, embeddings_model)
-    
-    # Salvando no disco para usarmos depois na API
-    vector_store.save_local(NOME_BANCO_VETORIAL)
-    print(f"--> SUCESSO! Banco de dados salvo na pasta: '{NOME_BANCO_VETORIAL}'")
+    vector_store.save_local(settings.VECTOR_STORE_PATH)
+    logger.info("Índice salvo em '%s'", settings.VECTOR_STORE_PATH)
+
 
 if __name__ == "__main__":
     main()
