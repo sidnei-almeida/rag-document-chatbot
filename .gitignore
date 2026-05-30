@@ -50,6 +50,10 @@ Thumbs.db
 
 # PDFs pessoais / uploads locais
 documents/
+documento.pdf
+
+# Imagens do README (GitHub only — HF Space rejeita binários no Git)
+images/
 
 # Índice FAISS — recriar com POST /upload ou /demo/load-sample (não enviar ao HF)
 faiss_index/
