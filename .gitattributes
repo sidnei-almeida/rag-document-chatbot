@@ -1,8 +1,8 @@
-# Auto detect text files and perform LF normalization
+# Normalização de texto
 * text=auto
-faiss_index/index.faiss filter=lfs diff=lfs merge=lfs -text
-faiss_index/index.pkl filter=lfs diff=lfs merge=lfs -text
-faiss_index/* filter=lfs diff=lfs merge=lfs -text
-documents/*.pdf filter=lfs diff=lfs merge=lfs -text
-# Sample demo PDF is small (~5 KB) — commit normalmente, sem LFS
+
+# Sample demo (~5 KB) — commit normal, sem LFS
 sample_documents/*.pdf -filter -diff
+
+# Nota: faiss_index/ e documents/ estão no .gitignore.
+# Não use mais Git LFS neste repo (HF Spaces rejeita binários no histórico).
