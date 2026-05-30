@@ -12,14 +12,14 @@ def test_validate_question_empty():
     with pytest.raises(HTTPException) as exc_info:
         validate_question("   ")
     assert exc_info.value.status_code == 400
-    assert "empty" in exc_info.value.detail.lower()
+    assert "empty" in exc_info.value.detail["error"].lower()
 
 
 def test_validate_question_too_long():
     with pytest.raises(HTTPException) as exc_info:
         validate_question("x" * (settings.MAX_QUESTION_LENGTH + 1))
     assert exc_info.value.status_code == 400
-    assert "too long" in exc_info.value.detail.lower()
+    assert "too long" in exc_info.value.detail["error"].lower()
 
 
 def test_validate_question_strips_and_returns():
@@ -31,7 +31,7 @@ def test_validate_pdf_upload_rejects_non_pdf():
     with pytest.raises(HTTPException) as exc_info:
         validate_pdf_upload(upload, b"hello")
     assert exc_info.value.status_code == 400
-    assert "PDF" in exc_info.value.detail
+    assert "PDF" in exc_info.value.detail["error"]
 
 
 def test_validate_pdf_upload_rejects_oversized_file():
@@ -39,8 +39,8 @@ def test_validate_pdf_upload_rejects_oversized_file():
     oversized = b"x" * (settings.max_file_size_bytes() + 1)
     with pytest.raises(HTTPException) as exc_info:
         validate_pdf_upload(upload, oversized)
-    assert exc_info.value.status_code == 400
-    assert "too large" in exc_info.value.detail.lower()
+    assert exc_info.value.status_code == 413
+    assert "exceeds" in exc_info.value.detail["error"].lower()
 
 
 def test_validate_pdf_upload_accepts_small_pdf():

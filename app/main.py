@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router
+from app.api.workspace_routes import router as workspace_router
 from app.core.config import get_cors_origins
 from app.core.logging_config import setup_logging
 
@@ -45,13 +46,19 @@ def create_app(
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
 
     @application.exception_handler(HTTPException)
     async def http_exception_handler(_request: Request, exc: HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        detail = exc.detail
+        if isinstance(detail, dict) and "error" in detail:
+            return JSONResponse(status_code=exc.status_code, content=detail)
+        if isinstance(detail, str):
+            return JSONResponse(status_code=exc.status_code, content={"error": detail})
+        return JSONResponse(status_code=exc.status_code, content={"detail": detail})
 
     @application.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -62,6 +69,7 @@ def create_app(
         )
 
     application.include_router(router)
+    application.include_router(workspace_router)
     return application
 
 

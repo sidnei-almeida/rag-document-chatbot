@@ -1,70 +1,75 @@
-"""Document retrieval, source formatting, and confidence heuristics."""
+"""Workspace-scoped document retrieval and source formatting."""
 
 import logging
-import os
 import re
+import time
 from typing import Any, Literal, Optional
 
-from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 
 from app.core.config import settings
-from app.core.state import state
+from app.services.workspace.cache import get_retriever_for_workspace, load_vectorstore_for_workspace
 
 logger = logging.getLogger("docmind")
 
 
-def build_retriever(store: FAISS):
-    """Build a retriever with MMR search, falling back to similarity search."""
-    try:
-        state.retriever_type = "mmr"
-        return store.as_retriever(
-            search_type="mmr",
-            search_kwargs={
-                "k": settings.RETRIEVAL_K,
-                "fetch_k": settings.RETRIEVAL_FETCH_K,
-                "lambda_mult": settings.RETRIEVAL_LAMBDA,
-            },
-        )
-    except Exception as exc:
-        logger.warning("MMR retriever unavailable, falling back to similarity: %s", exc)
-        state.retriever_type = "similarity"
-        return store.as_retriever(search_kwargs={"k": settings.RETRIEVAL_K})
-
-
-def ensure_retriever_ready() -> None:
-    """Load retriever from disk when index.faiss exists (safe no-op otherwise)."""
-    from app.services.faiss_index import try_load_faiss_from_disk
-
-    if state.retriever is not None:
-        return
-    try_load_faiss_from_disk()
-
-
-def retrieve_documents(question: str) -> tuple[list[Document], Optional[list[float]]]:
-    """Retrieve documents, preferring similarity scores when available."""
-    if state.vector_store is not None:
-        try:
-            results = state.vector_store.similarity_search_with_score(
-                question, k=settings.RETRIEVAL_K
+def _filter_docs_for_workspace(workspace_id: str, docs: list[Document]) -> list[Document]:
+    """Drop chunks whose metadata workspace_id does not match (safety guard)."""
+    filtered: list[Document] = []
+    for doc in docs:
+        meta_ws = (doc.metadata or {}).get("workspace_id")
+        if meta_ws and meta_ws != workspace_id:
+            logger.warning(
+                "Discarding retrieved chunk from workspace %s (requested %s)",
+                meta_ws,
+                workspace_id,
             )
-            docs = [doc for doc, _ in results]
-            scores = [float(score) for _, score in results]
-            logger.info("Retrieved %s chunks via similarity_search_with_score", len(docs))
-            return docs, scores
-        except Exception as exc:
-            logger.warning("similarity_search_with_score failed, using retriever: %s", exc)
+            continue
+        filtered.append(doc)
+    return filtered
 
-    if state.retriever is not None:
-        docs = state.retriever.invoke(question)
-        logger.info("Retrieved %s chunks via retriever fallback", len(docs))
-        return docs, None
 
-    return [], None
+def retrieve_documents_for_workspace(
+    workspace_id: str,
+    question: str,
+) -> tuple[list[Document], Optional[list[float]]]:
+    """Retrieve chunks only from the given workspace FAISS index."""
+    store = load_vectorstore_for_workspace(workspace_id)
+    try:
+        results = store.similarity_search_with_score(question, k=settings.RETRIEVAL_K)
+        pairs: list[tuple[Document, float]] = []
+        for doc, score in results:
+            meta_ws = (doc.metadata or {}).get("workspace_id")
+            if meta_ws and meta_ws != workspace_id:
+                logger.warning(
+                    "Discarding retrieved chunk from workspace %s (requested %s)",
+                    meta_ws,
+                    workspace_id,
+                )
+                continue
+            pairs.append((doc, float(score)))
+        docs = [doc for doc, _ in pairs]
+        scores = [score for _, score in pairs] if pairs else None
+        logger.info(
+            "Workspace %s: retrieved %s chunks via similarity_search_with_score",
+            workspace_id,
+            len(docs),
+        )
+        return docs, scores
+    except Exception as exc:
+        logger.warning(
+            "Workspace %s: similarity_search_with_score failed (%s), using retriever",
+            workspace_id,
+            exc,
+        )
+
+    retriever = get_retriever_for_workspace(workspace_id)
+    docs = _filter_docs_for_workspace(workspace_id, retriever.invoke(question))
+    logger.info("Workspace %s: retrieved %s chunks via retriever", workspace_id, len(docs))
+    return docs, None
 
 
 def clean_preview(text: str, max_length: int | None = None) -> str:
-    """Normalize whitespace and truncate chunk text for API previews."""
     limit = max_length or settings.PREVIEW_MAX_LENGTH
     cleaned = re.sub(r"\s+", " ", text.strip())
     if len(cleaned) <= limit:
@@ -72,8 +77,11 @@ def clean_preview(text: str, max_length: int | None = None) -> str:
     return cleaned[: limit - 3].rstrip() + "..."
 
 
+def _metadata_filename(metadata: dict) -> str:
+    return str(metadata.get("filename") or metadata.get("file_name") or "document.pdf")
+
+
 def extract_page_index(metadata: dict) -> int:
-    """Return 0-indexed page number from document metadata."""
     raw = metadata.get("page", metadata.get("page_number", 0))
     if isinstance(raw, int):
         return max(0, raw)
@@ -83,23 +91,12 @@ def extract_page_index(metadata: dict) -> int:
         return 0
 
 
-def extract_file_name(metadata: dict) -> str:
-    """Resolve a human-readable file name from chunk metadata."""
-    for key in ("file_name", "filename", "source"):
-        value = metadata.get(key)
-        if not value:
-            continue
-        if key == "source":
-            return os.path.basename(str(value))
-        return str(value)
-    return state.last_indexed_filename
-
-
-def format_sources(
+def format_sources_for_workspace(
+    workspace_id: str,
     docs: list[Document],
     scores: Optional[list[float]] = None,
 ) -> list[dict[str, Any]]:
-    """Format retrieved documents into structured source objects."""
+    """Format sources; discard any chunk whose workspace_id does not match."""
     sources: list[dict[str, Any]] = []
     for idx, doc in enumerate(docs):
         content = doc.page_content.strip()
@@ -107,8 +104,19 @@ def format_sources(
             continue
 
         metadata = doc.metadata or {}
+        chunk_workspace = metadata.get("workspace_id")
+        if chunk_workspace and chunk_workspace != workspace_id:
+            logger.warning(
+                "Discarding chunk from workspace %s (requested %s)",
+                chunk_workspace,
+                workspace_id,
+            )
+            continue
+
         page_index = extract_page_index(metadata)
-        chunk_id = metadata.get("chunk_id", metadata.get("id", idx))
+        chunk_id = metadata.get("chunk_id", f"chunk_{idx:03d}")
+        filename = _metadata_filename(metadata)
+        document_id = metadata.get("document_id", "unknown")
 
         score: Optional[float] = None
         if scores is not None and idx < len(scores):
@@ -116,12 +124,13 @@ def format_sources(
 
         sources.append(
             {
-                "chunk_id": chunk_id,
+                "workspace_id": workspace_id,
+                "document_id": document_id,
+                "filename": filename,
                 "page": page_index + 1,
-                "page_index": page_index,
-                "file_name": extract_file_name(metadata),
-                "preview": clean_preview(content),
+                "chunk_id": chunk_id,
                 "score": score,
+                "preview": clean_preview(content),
             }
         )
     return sources
@@ -131,7 +140,6 @@ def filter_useful_documents_with_scores(
     docs: list[Document],
     scores: Optional[list[float]] = None,
 ) -> tuple[list[Document], Optional[list[float]]]:
-    """Keep non-empty chunks and align similarity scores when present."""
     useful_docs: list[Document] = []
     useful_scores: list[float] = []
     has_scores = scores is not None
@@ -149,14 +157,16 @@ def filter_useful_documents_with_scores(
 
 
 def format_context_from_documents(docs: list[Document]) -> str:
-    """Build LLM context with humanized page numbers (1-indexed)."""
     context_parts = []
     for doc in docs:
-        page_index = extract_page_index(doc.metadata or {})
-        page_display = page_index + 1
+        metadata = doc.metadata or {}
+        page_index = extract_page_index(metadata)
+        filename = _metadata_filename(metadata)
         content = doc.page_content.strip()
         if content:
-            context_parts.append(f"[Page {page_display}]\n{content}")
+            context_parts.append(
+                f"[{filename} — Page {page_index + 1}]\n{content}"
+            )
     return "\n\n---\n\n".join(context_parts)
 
 
@@ -165,7 +175,6 @@ def compute_confidence(
     has_context: bool,
     scores: Optional[list[float]] = None,
 ) -> tuple[Literal["high", "medium", "low"], str]:
-    """Heuristic confidence based on retrieved evidence."""
     _ = scores
     if not has_context or useful_chunk_count == 0:
         return "low", "No reliable document context was found."
@@ -176,28 +185,28 @@ def compute_confidence(
     return "low", "Only 1 relevant passage was found."
 
 
-def build_response_metadata(chunks_used: int) -> dict[str, Any]:
-    return {
-        "model": settings.GROQ_MODEL,
-        "retrieval_k": settings.RETRIEVAL_K,
-        "chunks_used": chunks_used,
-        "embedding_model": settings.EMBEDDING_MODEL_NAME,
-    }
-
-
 def build_ask_response(
+    *,
+    workspace_id: str,
     answer: str,
     sources: list[dict[str, Any]],
     confidence_label: Literal["high", "medium", "low"],
-    confidence_reason: str,
-    chunks_used: int = 0,
+    retrieval_used: bool,
+    latency_ms: int,
+    confidence_reason: str | None = None,
 ) -> dict[str, Any]:
     return {
         "answer": answer,
+        "workspace_id": workspace_id,
         "sources": sources,
-        "confidence": {
-            "label": confidence_label,
-            "reason": confidence_reason,
+        "confidence": confidence_label,
+        "confidence_reason": confidence_reason,
+        "retrieval_used": retrieval_used,
+        "latency_ms": latency_ms,
+        "model": settings.GROQ_MODEL,
+        "metadata": {
+            "embedding_model": settings.EMBEDDING_MODEL_NAME,
+            "retrieval_k": settings.RETRIEVAL_K,
+            "chunks_used": len(sources),
         },
-        "metadata": build_response_metadata(chunks_used),
     }

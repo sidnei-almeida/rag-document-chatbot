@@ -1,4 +1,4 @@
-"""Application startup: embeddings, FAISS, and Groq LLM."""
+"""Application startup: embeddings and Groq LLM (workspace indexes load on demand)."""
 
 import logging
 import os
@@ -8,32 +8,37 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 from app.core.config import settings
 from app.core.state import state
-from app.services.faiss_index import (
-    faiss_index_exists,
-    log_rag_disabled,
-    maybe_bootstrap_index_from_bundled_documents,
-    try_load_faiss_from_disk,
-)
 
 logger = logging.getLogger("docmind")
 
 
+def _maybe_bootstrap_sample_workspace() -> None:
+    if not settings.AUTO_LOAD_SAMPLE_ON_STARTUP:
+        return
+    from app.services.workspace.registry import get_default_workspace_id
+
+    if get_default_workspace_id():
+        logger.info("Sample workspace already present; skipping auto-load")
+        return
+    try:
+        from app.services.sample_loader import load_sample_workspace
+
+        load_sample_workspace()
+    except FileNotFoundError:
+        logger.info("No bundled sample PDF for workspace bootstrap")
+    except Exception as exc:
+        logger.warning("Sample workspace bootstrap failed: %s", exc)
+
+
 def initialize_models() -> None:
-    """Load embeddings, optional FAISS index, and Groq LLM. Never fails on missing index."""
+    """Load embeddings and Groq LLM. Workspace FAISS indexes are loaded per request."""
     if not settings.GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY not configured. Set the GROQ_API_KEY environment variable.")
 
     logger.info("Loading embeddings model: %s", settings.EMBEDDING_MODEL_NAME)
     state.embeddings_model = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL_NAME)
 
-    if faiss_index_exists():
-        loaded = try_load_faiss_from_disk()
-        if not loaded:
-            log_rag_disabled()
-    else:
-        bootstrapped = maybe_bootstrap_index_from_bundled_documents()
-        if not bootstrapped:
-            log_rag_disabled()
+    _maybe_bootstrap_sample_workspace()
 
     os.environ["GROQ_API_KEY"] = settings.GROQ_API_KEY
     logger.info(
@@ -55,9 +60,7 @@ def initialize_models() -> None:
         raise
 
     logger.info(
-        "Startup complete — api_ready=%s llm_ready=%s index_ready=%s index_path=%s",
+        "Startup complete — api_ready=%s llm_ready=%s",
         state.is_api_ready(),
         state.is_llm_ready(),
-        state.is_index_ready(),
-        state.index_path_display(),
     )

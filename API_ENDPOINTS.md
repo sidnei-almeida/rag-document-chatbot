@@ -158,13 +158,34 @@ curl -X POST http://localhost:7860/demo/load-sample
 
 ---
 
-## 5. Upload PDF Document
+## 5. Conversations (document isolation)
+
+Each **conversation** is an isolated FAISS index. Questions in `/ask` only use documents from the **active** conversation.
+
+| Action | How |
+|--------|-----|
+| **New conversation** (default) | `POST /upload` with `new_session=true` (default) or `POST /upload/batch` — **discards** previous PDFs |
+| **Add PDFs to same conversation** | First upload with `new_session=true`, then more with `new_session=false` |
+| **Several PDFs at once** | `POST /upload/batch` with multiple `files` |
+| **End conversation** | `DELETE /clear` |
+
+**Query param** `new_session` (default `true`):
+- `true` → new document set; previous index is cleared
+- `false` → append to the current conversation (max `MAX_DOCUMENTS_PER_SESSION`, default 10)
+
+**`/status`** returns `conversation_id` and `conversation.documents[]`. Send the same `conversation_id` in `/ask` to detect stale clients (`409` if outdated).
+
+---
+
+## 6. Upload PDF Document
 
 ### POST `/upload`
 
-Upload a PDF file to be processed and indexed. This endpoint processes the PDF, creates embeddings, and updates the FAISS vector index.
+Upload a PDF file to be processed and indexed.
 
 **Content-Type**: `multipart/form-data`
+
+**Query**: `new_session` (boolean, default `true`)
 
 **Request Body**:
 - `file` (File, required): PDF file to upload
@@ -176,9 +197,26 @@ Upload a PDF file to be processed and indexed. This endpoint processes the PDF, 
   "filename": "document.pdf",
   "pages": 10,
   "chunks": 45,
-  "status": "ready"
+  "status": "ready",
+  "new_session": true,
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+  "conversation": {
+    "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+    "document_count": 1,
+    "documents": [{"file_name": "document.pdf", "pages": 10, "chunks": 45}],
+    "total_pages": 10,
+    "total_chunks": 45
+  }
 }
 ```
+
+### POST `/upload/batch`
+
+Upload **multiple PDFs in one new conversation** (replaces any previous index).
+
+**Request**: `files` — array of PDFs (same field name repeated in multipart).
+
+**Response**: `conversation_id`, `files[]` per document, `conversation` summary.
 
 **Fields**:
 - `message`: Success message

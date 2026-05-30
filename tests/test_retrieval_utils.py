@@ -3,13 +3,12 @@
 from langchain_core.documents import Document
 
 from app.core.config import settings
-from app.core.state import state
 from app.services.retrieval import (
     build_ask_response,
     clean_preview,
     compute_confidence,
     extract_page_index,
-    format_sources,
+    format_sources_for_workspace,
 )
 
 
@@ -19,20 +18,53 @@ def test_extract_page_index_defaults_to_zero():
 
 
 def test_page_is_one_indexed_in_sources():
-    state.last_indexed_filename = "report.pdf"
     docs = [
         Document(
             page_content="Revenue grew in Q4.",
-            metadata={"page": 0, "file_name": "report.pdf", "chunk_id": 7},
+            metadata={
+                "workspace_id": "ws_test",
+                "document_id": "doc_1",
+                "filename": "report.pdf",
+                "page": 0,
+                "chunk_id": "chunk_007",
+            },
         )
     ]
-    sources = format_sources(docs, scores=[0.25])
+    sources = format_sources_for_workspace("ws_test", docs, scores=[0.25])
     assert len(sources) == 1
-    assert sources[0]["page_index"] == 0
     assert sources[0]["page"] == 1
-    assert sources[0]["file_name"] == "report.pdf"
-    assert sources[0]["chunk_id"] == 7
+    assert sources[0]["filename"] == "report.pdf"
+    assert sources[0]["chunk_id"] == "chunk_007"
+    assert sources[0]["workspace_id"] == "ws_test"
     assert sources[0]["score"] == 0.25
+
+
+def test_format_sources_discards_wrong_workspace():
+    docs = [
+        Document(
+            page_content="Secret from B",
+            metadata={
+                "workspace_id": "ws_b",
+                "document_id": "doc_b",
+                "filename": "b.pdf",
+                "page": 0,
+                "chunk_id": "chunk_000",
+            },
+        ),
+        Document(
+            page_content="Valid from A",
+            metadata={
+                "workspace_id": "ws_a",
+                "document_id": "doc_a",
+                "filename": "a.pdf",
+                "page": 0,
+                "chunk_id": "chunk_001",
+            },
+        ),
+    ]
+    sources = format_sources_for_workspace("ws_a", docs)
+    assert len(sources) == 1
+    assert sources[0]["filename"] == "a.pdf"
 
 
 def test_clean_preview_collapses_whitespace_and_truncates():
@@ -45,13 +77,24 @@ def test_clean_preview_collapses_whitespace_and_truncates():
 
 def test_format_sources_skips_empty_chunks():
     docs = [
-        Document(page_content="   ", metadata={"page": 0}),
-        Document(page_content="Valid content.", metadata={"page": 1}),
+        Document(
+            page_content="   ",
+            metadata={"workspace_id": "ws", "document_id": "d", "filename": "f.pdf", "page": 0},
+        ),
+        Document(
+            page_content="Valid content.",
+            metadata={
+                "workspace_id": "ws",
+                "document_id": "d",
+                "filename": "f.pdf",
+                "page": 1,
+                "chunk_id": "chunk_001",
+            },
+        ),
     ]
-    sources = format_sources(docs)
+    sources = format_sources_for_workspace("ws", docs)
     assert len(sources) == 1
     assert sources[0]["page"] == 2
-    assert sources[0]["page_index"] == 1
 
 
 def test_compute_confidence_levels():
@@ -72,13 +115,16 @@ def test_compute_confidence_levels():
 
 def test_build_ask_response_shape():
     payload = build_ask_response(
+        workspace_id="ws_abc",
         answer="Answer text",
         sources=[],
         confidence_label="medium",
-        confidence_reason="Answer based on 2 retrieved passages.",
-        chunks_used=2,
+        confidence_reason="Based on context.",
+        retrieval_used=True,
+        latency_ms=100,
     )
-    assert payload["answer"] == "Answer text"
-    assert payload["confidence"]["label"] == "medium"
-    assert payload["metadata"]["chunks_used"] == 2
-    assert payload["metadata"]["model"] == settings.GROQ_MODEL
+    assert payload["workspace_id"] == "ws_abc"
+    assert payload["confidence"] == "medium"
+    assert payload["retrieval_used"] is True
+    assert payload["latency_ms"] == 100
+    assert payload["model"] == settings.GROQ_MODEL

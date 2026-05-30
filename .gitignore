@@ -57,6 +57,7 @@ images/
 
 # Índice FAISS — recriar com POST /upload ou /demo/load-sample (não enviar ao HF)
 faiss_index/
+storage/
 
 # Testes / cobertura (código em tests/ continua versionado)
 .pytest_cache/

@@ -1,12 +1,13 @@
-"""Guards for RAG-dependent API routes."""
+"""Guards for API routes."""
 
 from fastapi import HTTPException
 
 from app.core.state import state
+from app.services.workspace.cache import workspace_index_ready
+from app.services.workspace.service import workspace_exists
 
 RAG_UNAVAILABLE_DETAIL = (
-    "RAG is disabled until a document index is ready. "
-    "Use POST /demo/load-sample or POST /upload to index a PDF first."
+    "RAG is disabled for this workspace. Upload PDFs via POST /workspaces/upload first."
 )
 
 
@@ -21,11 +22,16 @@ def require_llm_ready() -> None:
         raise HTTPException(status_code=503, detail="LLM is not configured. Set GROQ_API_KEY.")
 
 
-def require_rag_index() -> None:
-    """Raise 503 when document retrieval is not available."""
-    from app.services.retrieval import ensure_retriever_ready
-
+def require_workspace_ready(workspace_id: str) -> None:
+    """Raise 404/503 when workspace or its FAISS index is unavailable."""
     require_llm_ready()
-    ensure_retriever_ready()
-    if not state.is_index_ready():
-        raise HTTPException(status_code=503, detail=RAG_UNAVAILABLE_DETAIL)
+    if not workspace_exists(workspace_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workspace '{workspace_id}' not found.",
+        )
+    if not workspace_index_ready(workspace_id):
+        raise HTTPException(
+            status_code=503,
+            detail=RAG_UNAVAILABLE_DETAIL,
+        )

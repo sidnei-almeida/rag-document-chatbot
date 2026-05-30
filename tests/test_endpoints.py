@@ -1,11 +1,12 @@
-"""API endpoint tests with mocked LLM and ingestion."""
+"""API endpoint tests with mocked LLM and workspace ingestion."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from langchain_core.documents import Document
 
 from app.core.config import settings
 from app.core.state import state
+from tests.conftest import mock_workspace_index_pipeline
 
 
 def test_health_returns_expected_fields(client):
@@ -15,121 +16,114 @@ def test_health_returns_expected_fields(client):
     assert data["status"] in ("ok", "initializing")
     assert data["api_ready"] is True
     assert data["llm_ready"] is True
-    assert "index_ready" in data
-    assert "index_path" in data
-    assert data["index_path"].endswith("index.faiss")
+    assert data["embeddings_ready"] is True
+    assert data["storage_ready"] is True
+    assert data["documents_ready"] is False
+    assert data["workspace_count"] == 0
+    assert data["default_workspace_id"] is None
     assert data["model"] == settings.GROQ_MODEL
-    assert data["embedding_model"] == settings.EMBEDDING_MODEL_NAME
-    assert data["retrieval"]["k"] == settings.RETRIEVAL_K
-    assert data["limits"]["max_file_size_mb"] == settings.MAX_FILE_SIZE_MB
-    assert data["limits"]["max_pages"] == settings.MAX_PAGES
 
 
-def test_status_returns_document_fields(client):
+def test_status_returns_workspace_fields(client):
     response = client.get("/status")
     assert response.status_code == 200
     data = response.json()
-    assert "index_ready" in data
-    assert "document_loaded" in data
-    assert "limits" in data
-    assert data["model"] == settings.GROQ_MODEL
+    assert "default_workspace_id" in data
+    assert "workspace_count" in data
 
 
-def test_clear_resets_index_state(client):
-    state.retriever = MagicMock()
-    state.vector_store = MagicMock()
-    state.index_pages = 10
-    state.index_chunks = 50
-    state.index_cleared = False
-
+def test_clear_all_workspaces(client, monkeypatch):
+    mock_workspace_index_pipeline(monkeypatch)
+    client.post(
+        "/workspaces/upload",
+        files=[("files", ("a.pdf", b"%PDF-1.4", "application/pdf"))],
+    )
     response = client.delete("/clear")
     assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "cleared"
-    assert data["index_ready"] is False
-    assert state.retriever is None
-    assert state.vector_store is None
-    assert state.index_cleared is True
-    assert state.index_pages == 0
+    assert response.json()["workspaces_removed"] >= 1
 
 
 def test_ask_empty_question_returns_400(client):
-    response = client.post("/ask", json={"question": "   "})
+    response = client.post("/ask", json={"question": "   ", "workspace_id": "ws_x"})
     assert response.status_code == 400
-    assert "empty" in response.json()["detail"].lower()
 
 
 def test_ask_question_too_long_returns_400(client):
-    response = client.post("/ask", json={"question": "a" * (settings.MAX_QUESTION_LENGTH + 1)})
+    response = client.post(
+        "/ask",
+        json={
+            "question": "a" * (settings.MAX_QUESTION_LENGTH + 1),
+            "workspace_id": "ws_x",
+        },
+    )
     assert response.status_code == 400
-    assert "too long" in response.json()["detail"].lower()
 
 
-def test_ask_without_index_returns_503(client):
-    state.retriever = None
-    state.vector_store = None
-    response = client.post("/ask", json={"question": "What is the main topic?"})
-    assert response.status_code == 503
-    assert "rag" in response.json()["detail"].lower()
-    state.llm.invoke.assert_not_called()
-
-
-def test_ask_general_question_without_index_uses_mock_llm(client):
-    state.retriever = None
-    state.vector_store = None
+def test_ask_general_question_without_workspace(client):
     response = client.post("/ask", json={"question": "hello"})
     assert response.status_code == 200
     data = response.json()
     assert data["answer"]
-    assert data["sources"] == []
-    state.llm.invoke.assert_called_once()
+    assert data["retrieval_used"] is False
 
 
 def test_ask_no_evidence_does_not_call_llm(client, monkeypatch):
-    state.retriever = MagicMock()
-    state.vector_store = MagicMock()
-    monkeypatch.setattr(
-        "app.api.routes.retrieve_documents",
-        lambda _question: ([], None),
+    mock_workspace_index_pipeline(monkeypatch)
+    up = client.post(
+        "/workspaces/upload",
+        files=[("files", ("q.pdf", b"%PDF-1.4", "application/pdf"))],
     )
+    ws_id = up.json()["workspace_id"]
 
-    response = client.post("/ask", json={"question": "What is the secret code?"})
+    with patch(
+        "app.api.routes.retrieve_documents_for_workspace",
+        lambda _ws, _q: ([], None),
+    ):
+        response = client.post(
+            "/ask",
+            json={"workspace_id": ws_id, "question": "What is the secret code?"},
+        )
     assert response.status_code == 200
     data = response.json()
     assert data["answer"] == settings.NO_EVIDENCE_MESSAGE
     assert data["sources"] == []
-    assert data["confidence"]["label"] == "low"
+    assert data["confidence"] == "low"
     state.llm.invoke.assert_not_called()
 
 
-def test_ask_with_retrieved_context_returns_structured_response(client, monkeypatch):
-    state.retriever = MagicMock()
-    state.vector_store = MagicMock()
+def test_ask_with_retrieved_context(client, monkeypatch):
+    mock_workspace_index_pipeline(monkeypatch)
+    up = client.post(
+        "/workspaces/upload",
+        files=[("files", ("spec.pdf", b"%PDF-1.4", "application/pdf"))],
+    )
+    ws_id = up.json()["workspace_id"]
+
     docs = [
         Document(
-            page_content="The project uses FastAPI and FAISS.",
-            metadata={"page": 1, "file_name": "spec.pdf", "chunk_id": 0},
-        ),
-        Document(
-            page_content="Groq provides the LLM layer.",
-            metadata={"page": 2, "file_name": "spec.pdf", "chunk_id": 1},
+            page_content="FastAPI and FAISS stack.",
+            metadata={
+                "workspace_id": ws_id,
+                "document_id": "doc_1",
+                "filename": "spec.pdf",
+                "page": 0,
+                "chunk_id": "chunk_000",
+            },
         ),
     ]
-    monkeypatch.setattr(
-        "app.api.routes.retrieve_documents",
-        lambda _question: (docs, [0.3, 0.5]),
-    )
-
-    response = client.post("/ask", json={"question": "What stack is used?"})
+    with patch(
+        "app.api.routes.retrieve_documents_for_workspace",
+        lambda _ws, _q: (docs, [0.3]),
+    ):
+        response = client.post(
+            "/ask",
+            json={"workspace_id": ws_id, "question": "What stack is used?"},
+        )
     assert response.status_code == 200
     data = response.json()
-    assert data["answer"] == "Mocked LLM response for tests."
-    assert len(data["sources"]) == 2
-    assert data["sources"][0]["page"] == 2
-    assert data["sources"][0]["page_index"] == 1
-    assert "preview" in data["sources"][0]
-    assert data["confidence"]["label"] in ("high", "medium", "low")
-    assert data["metadata"]["chunks_used"] == 2
+    assert data["workspace_id"] == ws_id
+    assert data["sources"][0]["filename"] == "spec.pdf"
+    assert data["retrieval_used"] is True
     state.llm.invoke.assert_called_once()
 
 
@@ -139,21 +133,3 @@ def test_upload_rejects_non_pdf(client):
         files={"file": ("readme.txt", b"not a pdf", "text/plain")},
     )
     assert response.status_code == 400
-    assert "PDF" in response.json()["detail"]
-
-
-def test_upload_success_with_mocked_processing(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.api.routes.process_pdf_and_update_index",
-        lambda *_args, **_kwargs: (12, 3),
-    )
-    response = client.post(
-        "/upload",
-        files={"file": ("sample.pdf", b"%PDF-1.4 test content", "application/pdf")},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "ready"
-    assert data["pages"] == 3
-    assert data["chunks"] == 12
-    assert data["filename"] == "sample.pdf"

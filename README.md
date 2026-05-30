@@ -165,17 +165,48 @@ See **`evals/README.md`** for the `questions.json` schema and options.
 
 ---
 
-## HTTP API (summary)
+## HTTP API (workspace RAG)
+
+Each **upload** creates an isolated **workspace** (`workspace_id`). One or more PDFs in the same request share one FAISS index. The next upload creates a **new** workspace — documents never mix.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/` | API info and endpoint list. |
-| GET | `/health` | Health, model, retrieval settings, and **demo limits**. |
-| GET | `/status` | Index ready, document name, pages/chunks, limits. |
-| POST | `/ask` | JSON `{"question": "..."}` → rich RAG response with sources & confidence. |
-| POST | `/upload` | Multipart **PDF** (size/page limits for public demo). |
-| DELETE | `/clear` | Clears index in memory; blocks stale reload; removes disk index when possible. |
-| POST | `/demo/load-sample` | Loads bundled sample PDF for instant demo (no upload). |
+| GET | `/health` | `api_ready`, `documents_ready`, `workspace_count`, limits (OK with zero workspaces). |
+| GET | `/workspaces` | List workspaces for the sidebar. |
+| GET | `/workspaces/{workspace_id}` | Full workspace metadata + `documents[]`. |
+| **POST** | **`/workspaces/upload`** | **Primary upload** — field `files` (1+ PDFs). Returns `workspace_id`, `title`, `documents`, `total_pages`, `total_chunks`, `index_ready`. |
+| POST | `/ask` | `{"workspace_id":"...","question":"..."}` → `sources[]` with `document_id`, `filename`, `confidence`, `retrieval_used`, `latency_ms`. |
+| DELETE | `/workspaces/{workspace_id}` | Remove workspace, disk index, registry, and cache. |
+| DELETE | `/clear` | All workspaces, or `?workspace_id=` for one. |
+| POST | `/demo/load-sample` | Demo workspace from bundled sample PDF. |
+
+### Upload (recommended)
+
+```bash
+# One PDF
+curl -X POST http://localhost:7860/workspaces/upload -F "files=@document.pdf"
+
+# Multiple PDFs → one workspace
+curl -X POST http://localhost:7860/workspaces/upload \
+  -F "files=@contract.pdf" -F "files=@appendix.pdf"
+```
+
+### Ask
+
+```bash
+curl -X POST http://localhost:7860/ask \
+  -H "Content-Type: application/json" \
+  -d '{"workspace_id":"ws_20260530_abc123","question":"What are the payment terms?"}'
+```
+
+### Legacy (compatibility)
+
+| Method | Path | Notes |
+|--------|------|--------|
+| POST | `/upload` | Field `file` — still creates a **new** workspace; prefer `/workspaces/upload`. |
+| POST | `/upload/batch` | Deprecated — use `/workspaces/upload` with multiple `files`. |
+
+Manual test checklist: **`TESTING.md`**.
 
 ### Try sample document (API)
 
@@ -258,8 +289,12 @@ Display **`page`** (1-indexed) in the UI; **`page_index`** is the raw 0-based va
 | `RETRIEVAL_K` | `6` | Number of chunks returned by the retriever. |
 | `RETRIEVAL_FETCH_K` | `20` | Candidate pool size for MMR selection. |
 | `RETRIEVAL_LAMBDA` | `0.7` | MMR diversity vs. relevance trade-off. |
-| `MAX_FILE_SIZE_MB` | `8` | Public demo upload size cap. |
-| `MAX_PAGES` | `40` | Public demo page cap per PDF. |
+| `MAX_FILE_SIZE_MB` | `20` | Max size per PDF. |
+| `MAX_FILES_PER_WORKSPACE` | `5` | Max PDFs per upload/workspace. |
+| `MAX_PAGES_PER_FILE` | `40` | Max pages per PDF. |
+| `MAX_TOTAL_PAGES` | `100` | Max total pages per workspace. |
+| `WORKSPACE_STORAGE_ROOT` | `/tmp/docmind_storage/workspaces` | On-disk workspace layout. |
+| `ALLOWED_ORIGINS` | localhost:3000,5173 (default) | CORS for frontend; comma-separated or `*`. |
 | `MAX_QUESTION_LENGTH` | `1000` | Max characters per question. |
 | `ALLOWED_ORIGINS` | `*` | CORS: `*` or comma-separated origins. |
 | `VECTOR_STORE_PATH` | `/tmp/docmind_faiss_index` | Directory containing `index.faiss` (writable on HF Spaces). |

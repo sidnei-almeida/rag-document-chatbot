@@ -1,95 +1,122 @@
 """DocMind API route handlers."""
 
 import logging
-import os
-import tempfile
+import time
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from groq import RateLimitError
 
+from app.api.rag_guard import require_api_ready, require_llm_ready, require_workspace_ready
+from app.api.errors import api_error
+from app.api.validators import read_and_validate_upload_files, validate_question
 from app.core.config import settings
 from app.core.state import state
 from app.prompts.rag import create_general_prompt, create_rag_prompt, is_general_question
 from app.schemas.ask import AskResponse, QuestionRequest
 from app.schemas.demo import SampleDocumentInfo, SampleLoadResponse
-from app.api.rag_guard import require_api_ready, require_llm_ready, require_rag_index
-from app.services.sample_loader import load_sample_document
-from app.api.validators import validate_pdf_upload, validate_question
-from app.services.ingestion import clear_vector_index, process_pdf_and_update_index
+from app.schemas.workspace import WorkspaceUploadResponse
 from app.services.retrieval import (
     build_ask_response,
     compute_confidence,
     filter_useful_documents_with_scores,
     format_context_from_documents,
-    format_sources,
-    retrieve_documents,
+    format_sources_for_workspace,
+    retrieve_documents_for_workspace,
 )
+from app.services.sample_loader import load_sample_workspace
 from app.services.status import build_health_payload, build_status_payload
-
+from app.services.workspace.ingestion import create_workspace_from_uploads
+from app.services.workspace.service import (
+    delete_all_workspaces,
+    delete_workspace,
+    resolve_workspace_id,
+)
 logger = logging.getLogger("docmind")
 router = APIRouter()
 
 
 @router.post("/ask", response_model=AskResponse)
 async def ask_document(req: QuestionRequest):
+    started = time.perf_counter()
     try:
         question = validate_question(req.question)
-        logger.info("Received question (%s chars)", len(question))
 
         general = is_general_question(question)
 
         if general:
             require_llm_ready()
-            logger.info("General question with index present; skipping retrieval")
+            from app.services.workspace.registry import get_default_workspace_id
+
+            workspace_id = (
+                req.workspace_id
+                or req.conversation_id
+                or get_default_workspace_id()
+                or "none"
+            )
             prompt = create_general_prompt(question)
             response = state.llm.invoke(prompt)
             answer = response.content if hasattr(response, "content") else str(response)
+            latency_ms = int((time.perf_counter() - started) * 1000)
             return build_ask_response(
+                workspace_id=workspace_id,
                 answer=answer,
                 sources=[],
                 confidence_label="medium",
                 confidence_reason="General conversational question; no document retrieval performed.",
+                retrieval_used=False,
+                latency_ms=latency_ms,
             )
 
-        require_rag_index()
-        logger.info("Searching FAISS for relevant chunks")
-        docs, scores = retrieve_documents(question)
+        try:
+            workspace_id = resolve_workspace_id(
+                workspace_id=req.workspace_id,
+                conversation_id=req.conversation_id,
+            )
+        except ValueError as exc:
+            raise api_error(400, str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise api_error(404, str(exc)) from exc
+
+        require_workspace_ready(workspace_id)
+        docs, scores = retrieve_documents_for_workspace(workspace_id, question)
         useful_docs, aligned_scores = filter_useful_documents_with_scores(docs, scores)
-        logger.info("Found %s chunks (%s usable)", len(docs), len(useful_docs))
 
         if not useful_docs:
-            logger.info("No relevant chunks; returning no-evidence response")
+            latency_ms = int((time.perf_counter() - started) * 1000)
             return build_ask_response(
+                workspace_id=workspace_id,
                 answer=settings.NO_EVIDENCE_MESSAGE,
                 sources=[],
                 confidence_label="low",
                 confidence_reason="No reliable document context was found.",
+                retrieval_used=True,
+                latency_ms=latency_ms,
             )
 
-        structured_sources = format_sources(useful_docs, aligned_scores)
+        structured_sources = format_sources_for_workspace(
+            workspace_id, useful_docs, aligned_scores
+        )
         confidence_label, confidence_reason = compute_confidence(
             len(structured_sources), has_context=True, scores=aligned_scores
         )
         context = format_context_from_documents(useful_docs)
         prompt = create_rag_prompt(question, context)
-
-        logger.info("Sending prompt to Groq LLM")
         response = state.llm.invoke(prompt)
         answer = response.content if hasattr(response, "content") else str(response)
-        logger.info("Answer generated successfully")
+        latency_ms = int((time.perf_counter() - started) * 1000)
 
         return build_ask_response(
+            workspace_id=workspace_id,
             answer=answer,
             sources=structured_sources,
             confidence_label=confidence_label,
             confidence_reason=confidence_reason,
-            chunks_used=len(structured_sources),
+            retrieval_used=True,
+            latency_ms=latency_ms,
         )
     except HTTPException:
         raise
     except RateLimitError as exc:
-        error_details = getattr(exc, "message", str(exc))
-        logger.warning("Groq rate limit: %s", error_details)
         raise HTTPException(
             status_code=429,
             detail="The AI service is temporarily busy. Please try again in a moment.",
@@ -102,81 +129,70 @@ async def ask_document(req: QuestionRequest):
         ) from None
 
 
-@router.post("/upload")
-async def upload_pdf(
-    file: UploadFile = File(...),
-    replace: bool = Query(True, description="Replace entire index (True) or add (False)"),
-):
+@router.post("/upload", response_model=WorkspaceUploadResponse)
+async def upload_pdf_legacy(file: UploadFile = File(...)):
+    """
+    Legacy upload (field `file`). Prefer POST /workspaces/upload with `files`.
+
+    Internally creates a new isolated workspace.
+    """
     require_api_ready()
-
-    tmp_path: str | None = None
     try:
-        content = await file.read()
-        validate_pdf_upload(file, content)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(content)
-            tmp_path = tmp_file.name
-
-        logger.info("Received PDF upload: %s (%s bytes)", file.filename, len(content))
-        chunks_count, pages_count = process_pdf_and_update_index(
-            tmp_path, replace=replace, filename=file.filename
-        )
-
-        return {
-            "message": "PDF processed successfully",
-            "filename": file.filename,
-            "pages": pages_count,
-            "chunks": chunks_count,
-            "status": "ready",
-        }
+        uploads = await read_and_validate_upload_files([file])
+        result = create_workspace_from_uploads(uploads, source="upload")
+        return WorkspaceUploadResponse(**result)
     except HTTPException:
         raise
     except ValueError as exc:
-        logger.warning("Upload rejected: %s", exc)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise api_error(400, str(exc)) from exc
     except Exception:
-        logger.exception("Error processing PDF upload")
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to process the PDF right now. Please try a smaller file.",
-        ) from None
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        logger.exception("Legacy upload failed")
+        raise api_error(500, "Unable to process the PDF.") from None
+
+
+@router.post("/upload/batch", response_model=WorkspaceUploadResponse, deprecated=True)
+async def upload_batch_legacy(
+    files: list[UploadFile] = File(..., description="Use POST /workspaces/upload instead"),
+):
+    """Deprecated — use POST /workspaces/upload with multiple `files`."""
+    require_api_ready()
+    try:
+        uploads = await read_and_validate_upload_files(files)
+        result = create_workspace_from_uploads(uploads, source="upload")
+        return WorkspaceUploadResponse(**result)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise api_error(400, str(exc)) from exc
+    except Exception:
+        logger.exception("Legacy batch upload failed")
+        raise api_error(500, "Unable to process PDFs.") from None
 
 
 @router.post("/demo/load-sample", response_model=SampleLoadResponse)
 async def load_sample():
-    """Load the bundled sample PDF into the FAISS index (demo / Try sample document)."""
     require_api_ready()
-
     try:
-        chunks_count, pages_count, file_name = load_sample_document()
+        result = load_sample_workspace()
+        doc = result["documents"][0]
         return SampleLoadResponse(
             status="sample_loaded",
+            workspace_id=result["workspace_id"],
             document=SampleDocumentInfo(
-                file_name=file_name,
-                pages=pages_count,
-                chunks=chunks_count,
+                document_id=doc["document_id"],
+                filename=doc["filename"],
+                pages=doc["pages"],
+                chunks=doc["chunks"],
             ),
-            index_ready=state.is_index_ready(),
+            index_ready=result["index_ready"],
         )
     except FileNotFoundError as exc:
-        logger.warning("Sample document missing: %s", exc)
-        raise HTTPException(
-            status_code=404,
-            detail="Sample document is not available on this server.",
-        ) from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
-        logger.warning("Sample document rejected: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
-        logger.exception("Error loading sample document")
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to load the sample document right now. Please try again later.",
-        ) from None
+        logger.exception("Error loading sample workspace")
+        raise HTTPException(status_code=500, detail="Unable to load sample.") from None
 
 
 @router.get("/")
@@ -185,15 +201,18 @@ def home():
     return {
         "status": "DocMind API online",
         "endpoints": [
-            "/ask (POST) - Ask questions about documents",
-            "/upload (POST) - Upload PDF files to process",
-            "/demo/load-sample (POST) - Load bundled demo PDF",
-            "/health (GET) - Health and limits",
-            "/status (GET) - Index and document state",
-            "/clear (DELETE) - Clear/reset the document index",
+            "/workspaces/upload (POST) - Upload 1+ PDFs → new workspace",
+            "/workspaces (GET) - List workspaces",
+            "/workspaces/{workspace_id} (GET|DELETE)",
+            "/ask (POST) - Ask with workspace_id",
+            "/upload (POST) - Legacy single PDF → new workspace",
+            "/demo/load-sample (POST) - Demo workspace from sample PDF",
+            "/health (GET)",
+            "/status (GET)",
+            "/clear (DELETE) - Clear all or one workspace",
         ],
-        "health": payload["status"],
-        "index_ready": payload["index_ready"],
+        "default_workspace_id": payload.get("default_workspace_id"),
+        "index_ready": payload.get("index_ready"),
     }
 
 
@@ -208,17 +227,23 @@ def status():
 
 
 @router.delete("/clear")
-def clear_index():
+def clear_index(workspace_id: str | None = Query(None)):
     try:
-        clear_vector_index()
+        if workspace_id:
+            delete_workspace(workspace_id)
+            return {
+                "status": "deleted",
+                "workspace_id": workspace_id,
+                "message": f"Workspace {workspace_id} removed.",
+            }
+        count = delete_all_workspaces()
         return {
             "status": "cleared",
-            "index_ready": False,
-            "message": "Index cleared successfully.",
+            "workspaces_removed": count,
+            "message": "All workspaces removed.",
         }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception:
-        logger.exception("Error clearing index")
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to clear the index right now. Please try again later.",
-        ) from None
+        logger.exception("Error clearing workspace(s)")
+        raise HTTPException(status_code=500, detail="Unable to clear.") from None

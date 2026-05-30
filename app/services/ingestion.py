@@ -10,6 +10,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import settings
 from app.core.state import state
+from app.services.conversation import (
+    record_indexed_document,
+    validate_can_add_document,
+)
 from app.services.retrieval import build_retriever
 
 logger = logging.getLogger("docmind")
@@ -24,7 +28,7 @@ def create_text_splitter() -> RecursiveCharacterTextSplitter:
 
 
 def load_pdf_documents(pdf_path: str) -> list:
-    """Load PDF pages and enforce demo page limit."""
+    """Load PDF pages and enforce demo page limit for a single file."""
     loader = PyPDFLoader(pdf_path)
     documents = loader.load()
     page_count = len(documents)
@@ -32,40 +36,62 @@ def load_pdf_documents(pdf_path: str) -> list:
 
     if page_count > settings.MAX_PAGES:
         raise ValueError(
-            f"This demo supports PDFs up to {settings.MAX_PAGES} pages."
+            f"This demo supports PDFs up to {settings.MAX_PAGES} pages per file."
         )
     return documents
 
 
+def _assign_chunk_metadata(chunks: list, file_name: str) -> None:
+    """Assign stable chunk ids and file names within the current conversation."""
+    for chunk in chunks:
+        chunk.metadata["file_name"] = file_name
+        chunk.metadata["chunk_id"] = state.next_chunk_id
+        if state.conversation_id:
+            chunk.metadata["conversation_id"] = state.conversation_id
+        state.next_chunk_id += 1
+
+
 def process_pdf_and_update_index(
     pdf_path: str,
+    *,
     replace: bool = True,
     filename: str | None = None,
 ) -> tuple[int, int]:
-    """Process PDF file and update the in-memory and on-disk FAISS index."""
-    if filename:
-        state.last_indexed_filename = filename
+    """
+    Process PDF and update the in-memory and on-disk FAISS index.
 
-    logger.info("Processing PDF: %s (mode=%s)", pdf_path, "REPLACE" if replace else "ADD")
+    When replace=True, builds a new index from this file only (used for the first
+    document in a conversation). When replace=False, appends to the current index.
+    """
+    file_name = filename or os.path.basename(pdf_path)
+
+    logger.info(
+        "Processing PDF: %s (mode=%s, conversation=%s)",
+        file_name,
+        "REPLACE" if replace else "ADD",
+        state.conversation_id,
+    )
 
     documents = load_pdf_documents(pdf_path)
+    page_count = len(documents)
+
+    if not replace:
+        validate_can_add_document(page_count)
+
     text_splitter = create_text_splitter()
     chunks = text_splitter.split_documents(documents)
-
-    for chunk_index, chunk in enumerate(chunks):
-        chunk.metadata["file_name"] = state.last_indexed_filename
-        chunk.metadata["chunk_id"] = chunk_index
+    _assign_chunk_metadata(chunks, file_name)
 
     logger.info("Document split into %s chunks", len(chunks))
 
     if state.vector_store is None or replace:
         if replace and state.vector_store is not None:
-            logger.info("Replacing existing FAISS index")
+            logger.info("Replacing FAISS index for current conversation")
         else:
             logger.info("Creating new FAISS index")
         state.vector_store = FAISS.from_documents(chunks, state.embeddings_model)
     else:
-        logger.info("Adding documents to existing FAISS index")
+        logger.info("Adding document to conversation index (%s)", state.conversation_id)
         state.vector_store.add_documents(chunks)
 
     state.vector_store.save_local(settings.VECTOR_STORE_PATH)
@@ -73,18 +99,20 @@ def process_pdf_and_update_index(
 
     state.retriever = build_retriever(state.vector_store)
     state.index_cleared = False
-    state.index_pages = len(documents)
-    state.index_chunks = len(chunks)
+    record_indexed_document(file_name, page_count, len(chunks))
 
-    return len(chunks), len(documents)
+    return len(chunks), page_count
 
 
 def clear_vector_index() -> None:
     """Reset in-memory index and prevent stale disk reload after clear."""
+    from app.services.conversation import end_conversation
+
     state.vector_store = None
     state.retriever = None
     state.index_cleared = True
     state.reset_index_metadata()
+    end_conversation()
 
     removed = False
     if os.path.exists(settings.VECTOR_STORE_PATH):

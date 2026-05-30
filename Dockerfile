@@ -21,7 +21,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY --chown=user:user . .
 
 # Diretório gravável para o índice FAISS (usuário não-root não cria pasta na raiz /app)
-RUN mkdir -p /app/faiss_index /app/data && chown -R user:user /app/faiss_index /app/data
+RUN mkdir -p /tmp/docmind_storage/workspaces /app/data && \
+    chown -R user:user /tmp/docmind_storage /app/data
+
+ENV WORKSPACE_STORAGE_ROOT=/tmp/docmind_storage/workspaces
 
 USER user
 
