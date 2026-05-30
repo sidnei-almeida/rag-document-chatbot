@@ -262,7 +262,8 @@ Display **`page`** (1-indexed) in the UI; **`page_index`** is the raw 0-based va
 | `MAX_PAGES` | `40` | Public demo page cap per PDF. |
 | `MAX_QUESTION_LENGTH` | `1000` | Max characters per question. |
 | `ALLOWED_ORIGINS` | `*` | CORS: `*` or comma-separated origins. |
-| `VECTOR_STORE_NAME` | `faiss_index` | FAISS folder on disk. |
+| `VECTOR_STORE_PATH` | `/tmp/docmind_faiss_index` | Directory containing `index.faiss` (writable on HF Spaces). |
+| `AUTO_LOAD_SAMPLE_ON_STARTUP` | `true` | Build index from bundled sample PDF when `index.faiss` is missing. |
 | `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2` | Hugging Face embeddings model. |
 | `LOG_LEVEL` | `INFO` | Application log level. |
 

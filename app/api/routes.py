@@ -12,13 +12,13 @@ from app.core.state import state
 from app.prompts.rag import create_general_prompt, create_rag_prompt, is_general_question
 from app.schemas.ask import AskResponse, QuestionRequest
 from app.schemas.demo import SampleDocumentInfo, SampleLoadResponse
+from app.api.rag_guard import require_api_ready, require_llm_ready, require_rag_index
 from app.services.sample_loader import load_sample_document
 from app.api.validators import validate_pdf_upload, validate_question
 from app.services.ingestion import clear_vector_index, process_pdf_and_update_index
 from app.services.retrieval import (
     build_ask_response,
     compute_confidence,
-    ensure_retriever_ready,
     filter_useful_documents_with_scores,
     format_context_from_documents,
     format_sources,
@@ -32,34 +32,14 @@ router = APIRouter()
 
 @router.post("/ask", response_model=AskResponse)
 async def ask_document(req: QuestionRequest):
-    if not state.llm:
-        raise HTTPException(status_code=503, detail="API is still initializing.")
-
     try:
         question = validate_question(req.question)
         logger.info("Received question (%s chars)", len(question))
 
         general = is_general_question(question)
-        ensure_retriever_ready()
-
-        if not state.retriever and not state.vector_store:
-            if general:
-                logger.info("General question without index")
-                prompt = create_general_prompt(question)
-                response = state.llm.invoke(prompt)
-                answer = response.content if hasattr(response, "content") else str(response)
-                return build_ask_response(
-                    answer=answer,
-                    sources=[],
-                    confidence_label="medium",
-                    confidence_reason="General conversational question; no document retrieval performed.",
-                )
-            raise HTTPException(
-                status_code=400,
-                detail="Please upload a PDF before asking questions.",
-            )
 
         if general:
+            require_llm_ready()
             logger.info("General question with index present; skipping retrieval")
             prompt = create_general_prompt(question)
             response = state.llm.invoke(prompt)
@@ -71,6 +51,7 @@ async def ask_document(req: QuestionRequest):
                 confidence_reason="General conversational question; no document retrieval performed.",
             )
 
+        require_rag_index()
         logger.info("Searching FAISS for relevant chunks")
         docs, scores = retrieve_documents(question)
         useful_docs, aligned_scores = filter_useful_documents_with_scores(docs, scores)
@@ -126,8 +107,7 @@ async def upload_pdf(
     file: UploadFile = File(...),
     replace: bool = Query(True, description="Replace entire index (True) or add (False)"),
 ):
-    if not state.embeddings_model:
-        raise HTTPException(status_code=503, detail="API is still initializing.")
+    require_api_ready()
 
     tmp_path: str | None = None
     try:
@@ -169,8 +149,7 @@ async def upload_pdf(
 @router.post("/demo/load-sample", response_model=SampleLoadResponse)
 async def load_sample():
     """Load the bundled sample PDF into the FAISS index (demo / Try sample document)."""
-    if not state.embeddings_model:
-        raise HTTPException(status_code=503, detail="API is still initializing.")
+    require_api_ready()
 
     try:
         chunks_count, pages_count, file_name = load_sample_document()

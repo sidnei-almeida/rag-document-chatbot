@@ -2,20 +2,21 @@
 
 from app.core.config import settings
 from app.core.state import state
-from app.services.retrieval import ensure_retriever_ready
 
 
 def api_status_label() -> str:
-    """Return ok when LLM is ready, initializing otherwise."""
-    return "ok" if state.llm is not None else "initializing"
+    """Return ok when core API finished startup."""
+    return "ok" if state.is_api_ready() else "initializing"
 
 
 def build_health_payload() -> dict:
     """Technical health check for monitors and frontend boot."""
-    ensure_retriever_ready()
     return {
         "status": api_status_label(),
+        "api_ready": state.is_api_ready(),
+        "llm_ready": state.is_llm_ready(),
         "index_ready": state.is_index_ready(),
+        "index_path": state.index_path_display(),
         "model": settings.GROQ_MODEL,
         "embedding_model": settings.EMBEDDING_MODEL_NAME,
         "retrieval": settings.retrieval_dict(),
@@ -25,10 +26,12 @@ def build_health_payload() -> dict:
 
 def build_status_payload() -> dict:
     """Document/index state for demo UI."""
-    ensure_retriever_ready()
     return {
         "status": api_status_label(),
+        "api_ready": state.is_api_ready(),
+        "llm_ready": state.is_llm_ready(),
         "index_ready": state.is_index_ready(),
+        "index_path": state.index_path_display(),
         "document_loaded": state.document_loaded(),
         "file_name": state.last_indexed_filename if state.document_loaded() else None,
         "pages": state.index_pages if state.document_loaded() else None,

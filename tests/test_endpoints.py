@@ -13,7 +13,11 @@ def test_health_returns_expected_fields(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] in ("ok", "initializing")
+    assert data["api_ready"] is True
+    assert data["llm_ready"] is True
     assert "index_ready" in data
+    assert "index_path" in data
+    assert data["index_path"].endswith("index.faiss")
     assert data["model"] == settings.GROQ_MODEL
     assert data["embedding_model"] == settings.EMBEDDING_MODEL_NAME
     assert data["retrieval"]["k"] == settings.RETRIEVAL_K
@@ -61,12 +65,12 @@ def test_ask_question_too_long_returns_400(client):
     assert "too long" in response.json()["detail"].lower()
 
 
-def test_ask_without_index_requires_upload(client):
+def test_ask_without_index_returns_503(client):
     state.retriever = None
     state.vector_store = None
     response = client.post("/ask", json={"question": "What is the main topic?"})
-    assert response.status_code == 400
-    assert "upload" in response.json()["detail"].lower()
+    assert response.status_code == 503
+    assert "rag" in response.json()["detail"].lower()
     state.llm.invoke.assert_not_called()
 
 

@@ -18,7 +18,10 @@ Lightweight health check with model, retrieval, and **public demo limits**.
 ```json
 {
   "status": "ok",
+  "api_ready": true,
+  "llm_ready": true,
   "index_ready": true,
+  "index_path": "/tmp/docmind_faiss_index/index.faiss",
   "model": "llama-3.3-70b-versatile",
   "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
   "retrieval": {
@@ -325,13 +328,13 @@ Ask a question about the uploaded documents. The API will search the indexed doc
 |------|----------------|
 | Empty / whitespace only | `Question cannot be empty.` |
 | Longer than `MAX_QUESTION_LENGTH` (default 1000) | `Question is too long for this demo.` |
-| No index (non-general) | `Please upload a PDF before asking questions.` |
+| No index (non-general) | `503` — RAG disabled until index is ready (use upload or load-sample) |
 
 **Status Codes**:
 - `200 OK`: Question answered successfully
-- `400 Bad Request`: Validation or missing index
+- `400 Bad Request`: Validation errors only
 - `429 Too Many Requests`: Groq rate limit (friendly message)
-- `503 Service Unavailable`: API is still initializing
+- `503 Service Unavailable`: API initializing, LLM missing, or **RAG index not ready**
 - `500 Internal Server Error`: Generic processing error
 
 ---

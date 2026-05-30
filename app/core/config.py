@@ -45,6 +45,9 @@ class Settings:
     SAMPLE_DOCUMENT_FILENAME: str = os.getenv(
         "SAMPLE_DOCUMENT_FILENAME", "ai-document-intelligence-report.pdf"
     )
+    AUTO_LOAD_SAMPLE_ON_STARTUP: bool = os.getenv(
+        "AUTO_LOAD_SAMPLE_ON_STARTUP", "true"
+    ).lower() in ("1", "true", "yes")
 
     TEXT_SPLITTER_SEPARATORS: tuple[str, ...] = ("\n\n", "\n", ".", " ", "")
     NO_EVIDENCE_MESSAGE: str = (

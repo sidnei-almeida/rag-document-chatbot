@@ -33,30 +33,12 @@ def build_retriever(store: FAISS):
 
 
 def ensure_retriever_ready() -> None:
-    """Load retriever from disk when available and index has not been cleared."""
-    if state.index_cleared:
-        return
+    """Load retriever from disk when index.faiss exists (safe no-op otherwise)."""
+    from app.services.faiss_index import try_load_faiss_from_disk
+
     if state.retriever is not None:
         return
-    if state.embeddings_model is None:
-        logger.warning("Embeddings model not initialized; cannot load retriever yet")
-        return
-    if not os.path.exists(settings.VECTOR_STORE_PATH):
-        return
-
-    try:
-        logger.info("Loading FAISS index from '%s'", settings.VECTOR_STORE_PATH)
-        state.vector_store = FAISS.load_local(
-            settings.VECTOR_STORE_PATH,
-            state.embeddings_model,
-            allow_dangerous_deserialization=True,
-        )
-        state.retriever = build_retriever(state.vector_store)
-        logger.info("Retriever initialized from saved index")
-    except Exception as exc:
-        logger.warning("Failed to load retriever from disk: %s", exc)
-        state.vector_store = None
-        state.retriever = None
+    try_load_faiss_from_disk()
 
 
 def retrieve_documents(question: str) -> tuple[list[Document], Optional[list[float]]]:
