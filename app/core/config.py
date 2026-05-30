@@ -22,7 +22,10 @@ class Settings:
     EMBEDDING_MODEL_NAME: str = os.getenv(
         "EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2"
     )
-    VECTOR_STORE_PATH: str = os.getenv("VECTOR_STORE_NAME", "faiss_index")
+    VECTOR_STORE_PATH: str = os.getenv(
+        "VECTOR_STORE_PATH",
+        os.getenv("VECTOR_STORE_NAME", "/tmp/docmind_faiss_index"),
+    )
 
     CHUNK_SIZE: int = _env_int("CHUNK_SIZE", "1200")
     CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", "180")

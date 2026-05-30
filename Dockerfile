@@ -20,7 +20,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copiar código da aplicação
 COPY --chown=user:user . .
 
-# Mudar para usuário não-root
+# Diretório gravável para o índice FAISS (usuário não-root não cria pasta na raiz /app)
+RUN mkdir -p /app/faiss_index /app/data && chown -R user:user /app/faiss_index /app/data
+
 USER user
 
 # Hugging Face Spaces (Docker SDK) usa porta 7860 por padrão; PORT pode ser injetado
