@@ -1,5 +1,16 @@
+---
+title: DocMind RAG API
+emoji: 📄
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+---
+
 <p align="center">
-  <img src="./images/header.png" alt="DocMind — RAG Document AI — banner" width="920" />
+  <img src="https://raw.githubusercontent.com/sidnei-almeida/rag-document-chatbot/main/images/header.png" alt="DocMind — RAG Document AI — banner" width="920" />
 </p>
 
 <p align="center">
@@ -41,7 +52,7 @@ The service is **Docker-ready** (port **7860**, `uvicorn main:app`) and is deplo
 The API is designed to be consumed by any client. The screenshot below shows the **DocMind** web experience (upload, welcome state, suggested prompts) aligned with this backend’s **`/upload`** + **`/ask`** flow.
 
 <p align="center">
-  <img src="./images/software.png" alt="DocMind web UI — upload PDF, welcome screen, suggested questions" width="880" />
+  <img src="https://raw.githubusercontent.com/sidnei-almeida/rag-document-chatbot/main/images/software.png" alt="DocMind web UI — upload PDF, welcome screen, suggested questions" width="880" />
 </p>
 
 <p align="center">
